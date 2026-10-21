@@ -99,6 +99,7 @@ jobs:
             mkdir results-repo && cd results-repo && git init -q -b results && git remote add origin "$URL" && cd ..
           fi
           cd results-repo
+          find "$OUT_DIR" -name "*.ocr-*.json" -delete
           mkdir -p "$RUN_DIR" && cp -r "$OUT_DIR"/. "$RUN_DIR"/
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
