@@ -14,6 +14,9 @@ on:
       private_ref:
         description: Branch of Game-Auto to take scripts/APK from
         default: main
+      script:
+        description: Script in Game-Auto/scripts to run
+        default: run_phase1.sh
       apk_release_tag:
         description: Release tag in Game-Auto to download the APK from (empty = latest release, falls back to apk/ folder)
         default: ""
@@ -51,6 +54,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
           TAG: ${{ inputs.apk_release_tag }}
+          SCRIPT_IN: ${{ inputs.script }}
         run: |
           mkdir -p "$RUNNER_TEMP/apk"
           if gh release download $TAG --repo "$PRIVATE_REPO" --pattern '*.apk' --dir "$RUNNER_TEMP/apk" 2>/dev/null; then
@@ -62,6 +66,7 @@ jobs:
           APK="$(ls "$RUNNER_TEMP"/apk/*.apk | head -1)"
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
           echo "OUT_DIR=$RUNNER_TEMP/out" >> "$GITHUB_ENV"
+          echo "RUN_SCRIPT=$(basename "$SCRIPT_IN")" >> "$GITHUB_ENV"
           ls -lh "$RUNNER_TEMP/apk"
 
       - name: Install OCR tools
@@ -80,7 +85,7 @@ jobs:
           disk-size: 8G
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot
           disable-animations: true
-          script: bash private/scripts/run_phase1.sh "$APK_PATH" "$OUT_DIR"
+          script: bash "private/scripts/$RUN_SCRIPT" "$APK_PATH" "$OUT_DIR"
 
       - name: Save results to private repo (branch "results")
         if: always()
@@ -88,7 +93,7 @@ jobs:
           TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: |
           [ -d "$OUT_DIR" ] || { echo "No output to save"; exit 0; }
-          RUN_DIR="runs/$(date -u +%Y%m%d-%H%M%S)-run${GITHUB_RUN_ID}"
+          RUN_DIR="runs/$(date -u +%Y%m%d-%H%M%S)-${RUN_SCRIPT%.sh}-run${GITHUB_RUN_ID}"
           URL="https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
           if ! git clone -q --depth 1 --branch results "$URL" results-repo 2>/dev/null; then
             mkdir results-repo && cd results-repo && git init -q -b results && git remote add origin "$URL" && cd ..
