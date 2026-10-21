@@ -1,0 +1,107 @@
+name: Android Phase 1 - Guest to Lobby
+
+# Runs on this PUBLIC repo (free Actions minutes). All code, the APK and the
+# screenshots live in the PRIVATE repo Bhautik-4B/Game-Auto, reached with the
+# PRIVATE_REPO_TOKEN secret. Nothing private is uploaded here: logs of public
+# repos are public, so keep secrets out of echo statements.
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_level:
+        description: Android API level of the emulator (30+ can run ARM-only games)
+        default: "30"
+      private_ref:
+        description: Branch of Game-Auto to take scripts/APK from
+        default: main
+      apk_release_tag:
+        description: Release tag in Game-Auto to download the APK from (empty = latest release, falls back to apk/ folder)
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-phase1
+  cancel-in-progress: false
+
+env:
+  PRIVATE_REPO: Bhautik-4B/Game-Auto
+
+jobs:
+  phase1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Checkout private repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          ref: ${{ inputs.private_ref }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          path: private
+
+      - name: Get APK
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          TAG: ${{ inputs.apk_release_tag }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/apk"
+          if gh release download $TAG --repo "$PRIVATE_REPO" --pattern '*.apk' --dir "$RUNNER_TEMP/apk" 2>/dev/null; then
+            echo "APK taken from release ${TAG:-latest}"
+          else
+            cp private/apk/*.apk "$RUNNER_TEMP/apk/" 2>/dev/null || { echo "::error::No APK found (release or apk/ folder in $PRIVATE_REPO)"; exit 1; }
+            echo "APK taken from apk/ folder"
+          fi
+          APK="$(ls "$RUNNER_TEMP"/apk/*.apk | head -1)"
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+          echo "OUT_DIR=$RUNNER_TEMP/out" >> "$GITHUB_ENV"
+          ls -lh "$RUNNER_TEMP/apk"
+
+      - name: Install OCR tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tesseract-ocr imagemagick >/dev/null
+
+      - name: Run Phase 1 on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ inputs.api_level }}
+          target: google_apis
+          arch: x86_64
+          profile: pixel_4
+          ram-size: 4096M
+          disk-size: 8G
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot
+          disable-animations: true
+          script: bash private/scripts/run_phase1.sh "$APK_PATH" "$OUT_DIR"
+
+      - name: Save results to private repo (branch "results")
+        if: always()
+        env:
+          TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          [ -d "$OUT_DIR" ] || { echo "No output to save"; exit 0; }
+          RUN_DIR="runs/$(date -u +%Y%m%d-%H%M%S)-run${GITHUB_RUN_ID}"
+          URL="https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
+          if ! git clone -q --depth 1 --branch results "$URL" results-repo 2>/dev/null; then
+            mkdir results-repo && cd results-repo && git init -q -b results && git remote add origin "$URL" && cd ..
+          fi
+          cd results-repo
+          mkdir -p "$RUN_DIR" && cp -r "$OUT_DIR"/. "$RUN_DIR"/
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -q -m "Phase 1 results: $RUN_DIR"
+          git push -q origin results
+          {
+            echo "### Phase 1 finished"
+            echo "Results saved to the private repo, branch \`results\`, folder \`$RUN_DIR\`."
+            echo
+            echo "Status: \`$(sed -n 's/.*"status": "\([^"]*\)".*/\1/p' "$RUN_DIR/result.json" 2>/dev/null)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
