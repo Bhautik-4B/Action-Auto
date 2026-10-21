@@ -34,7 +34,7 @@ env:
 jobs:
   phase1:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - name: Enable KVM
         run: |
