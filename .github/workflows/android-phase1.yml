@@ -15,8 +15,8 @@ on:
         description: Branch of Game-Auto to take scripts/APK from
         default: main
       script:
-        description: Script in Game-Auto/scripts to run
-        default: run_phase1.sh
+        description: Script in Game-Auto/scripts to run (run_dragon_tiger_loop.sh = one account after another on the same machine)
+        default: run_dragon_tiger_loop.sh
       apk_release_tag:
         description: Release tag in Game-Auto to download the APK from (empty = latest release, falls back to apk/ folder)
         default: ""
@@ -148,11 +148,14 @@ jobs:
           disable-animations: true
           script: bash "private/scripts/$RUN_SCRIPT" "$APK_PATH" "$OUT_DIR"
 
-      # What happens to the guest account after the run, from result.json:
-      #   target_reached (balance >= target): archive it for good on branch
-      #     "accounts" (only ever added to, never deleted) and start a new guest next time
-      #   balance_zero: drop it; the next run starts a new guest
-      #   anything else: keep it on branch "state"; the next run continues it
+      # What happens to the guest accounts after the run, from result.json:
+      #   every account that reached the target (balance >= target) is archived for
+      #     good on branch "accounts" (only ever added to, never deleted). The loop
+      #     script puts them in $OUT_DIR/accounts/; the single-account script leaves
+      #     guest_state.tgz with status target_reached.
+      #   last status target_reached or balance_zero: nothing to continue, so branch
+      #     "state" is deleted and the next run starts a new guest
+      #   anything else: guest_state.tgz is kept on branch "state" for the next run
       - name: Archive, drop or keep the guest
         if: always()
         env:
@@ -161,37 +164,50 @@ jobs:
           URL="https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          field() { sed -n "s/.*\"$1\": \"\{0,1\}\([^\",}]*\).*/\1/p" "$OUT_DIR/result.json" 2>/dev/null || true; }
-          STATUS="$(field status)"; BAL="$(field end_balance)"; GID="$(field guest_id)"
-          echo "Run status: ${STATUS:-none}, balance: ${BAL:-?}"
+          field() { sed -n "s/.*\"$1\": \"\{0,1\}\([^\",}]*\).*/\1/p" "$2" 2>/dev/null || true; }
+          STATUS="$(field status "$OUT_DIR/result.json")"
+          echo "Run status: ${STATUS:-none}"
           drop_state() {  # delete branch "state" (needs a local repo to push from)
             rm -rf drop && git init -q drop && { git -C drop push -q "$URL" --delete state 2>/dev/null || true; }; rm -rf drop
           }
-
+          ACC="$OUT_DIR/accounts"; mkdir -p "$ACC"
           if [ "$STATUS" = target_reached ] && [ -f "$OUT_DIR/guest_state.tgz" ]; then
-            NAME="$(date -u +%Y%m%d-%H%M%S)-guest${GID:-unknown}-INR${BAL}"
-            if git clone -q --depth 1 --branch accounts "$URL" acc 2>/dev/null; then cd acc
-            else mkdir acc && cd acc && git init -q -b accounts && git remote add origin "$URL"
-              printf 'date,guest_id,balance,file,run\n' > index.csv; fi
-            mkdir -p accounts && cp "$OUT_DIR/guest_state.tgz" "accounts/$NAME.tgz"
-            cp "$OUT_DIR/result.json" "accounts/$NAME.json"
-            echo "$(date -u +%Y-%m-%d),${GID},${BAL},accounts/$NAME.tgz,${GITHUB_RUN_ID}" >> index.csv
-            git add -A && git commit -q -m "Archive account $NAME"
-            git push -q origin accounts   # plain push: never overwrites archived accounts
-            cd .. && drop_state
-            echo "Account archived as accounts/$NAME.tgz (branch accounts); next run starts a new guest" | tee -a "$GITHUB_STEP_SUMMARY"
-          elif [ "$STATUS" = balance_zero ]; then
-            drop_state
-            echo "Balance 0: guest dropped; next run starts a new guest" | tee -a "$GITHUB_STEP_SUMMARY"
-          elif [ -f "$OUT_DIR/guest_state.tgz" ]; then
-            mkdir state-out && cp "$OUT_DIR/guest_state.tgz" state-out/ && cd state-out
-            # One commit only: the branch keeps just the current guest.
-            git init -q -b state && git add guest_state.tgz && git commit -q -m "Guest state from run ${GITHUB_RUN_ID}"
-            git push -q -f "$URL" state
-            echo "Guest kept; next run continues it (balance ${BAL:-?})" | tee -a "$GITHUB_STEP_SUMMARY"
-          else
-            echo "No guest state to save"
+            NAME="$(date -u +%Y%m%d-%H%M%S)-guest$(field guest_id "$OUT_DIR/result.json")-INR$(field end_balance "$OUT_DIR/result.json")"
+            mv "$OUT_DIR/guest_state.tgz" "$ACC/$NAME.tgz" && cp "$OUT_DIR/result.json" "$ACC/$NAME.json"
           fi
+
+          if ls "$ACC"/*.tgz >/dev/null 2>&1; then
+            if git clone -q --depth 1 --branch accounts "$URL" acc 2>/dev/null; then :
+            else mkdir acc && git -C acc init -q -b accounts && git -C acc remote add origin "$URL"
+              printf 'date,guest_id,balance,file,run\n' > acc/index.csv; fi
+            mkdir -p acc/accounts
+            for f in "$ACC"/*.tgz; do
+              NAME="$(basename "$f" .tgz)"; J="$ACC/$NAME.json"
+              cp "$f" "acc/accounts/$NAME.tgz"; [ -f "$J" ] && cp "$J" "acc/accounts/$NAME.json"
+              echo "$(date -u +%Y-%m-%d),$(field guest_id "$J"),$(field end_balance "$J"),accounts/$NAME.tgz,${GITHUB_RUN_ID}" >> acc/index.csv
+              echo "Archived account accounts/$NAME.tgz" | tee -a "$GITHUB_STEP_SUMMARY"
+            done
+            git -C acc add -A && git -C acc commit -q -m "Archive accounts from run ${GITHUB_RUN_ID}"
+            git -C acc push -q origin accounts   # plain push: never overwrites archived accounts
+            rm -f "$ACC"/*.tgz
+          fi
+
+          case "$STATUS" in
+            target_reached|balance_zero)
+              drop_state
+              echo "Last account finished (${STATUS}); next run starts a new guest" | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            *)
+              if [ -f "$OUT_DIR/guest_state.tgz" ]; then
+                rm -rf state-out && mkdir state-out && cp "$OUT_DIR/guest_state.tgz" state-out/
+                # One commit only: the branch keeps just the current guest.
+                git -C state-out init -q -b state && git -C state-out add guest_state.tgz \
+                  && git -C state-out commit -q -m "Guest state from run ${GITHUB_RUN_ID}"
+                git -C state-out push -q -f "$URL" state
+                echo "Guest kept (${STATUS:-no status}); next run continues it" | tee -a "$GITHUB_STEP_SUMMARY"
+              else
+                echo "No guest state to save"
+              fi ;;
+          esac
           rm -f "$OUT_DIR/guest_state.tgz"
 
       - name: Save results to private repo (branch "results")
