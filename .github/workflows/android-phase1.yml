@@ -27,6 +27,7 @@ on:
 
 permissions:
   contents: read
+  actions: write   # only for deleting old runs of this workflow (last step)
 
 concurrency:
   group: android-phase1
@@ -176,3 +177,16 @@ jobs:
             echo
             echo "Status: \`$(sed -n 's/.*"status": "\([^"]*\)".*/\1/p' "$RUN_DIR/result.json" 2>/dev/null)\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Keep only the newest 3 runs of this workflow in the Actions tab (this run
+      # counts as one); older finished runs and their public logs are deleted.
+      - name: Delete old runs (keep newest 3)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/android-phase1.yml/runs?per_page=100" \
+            --jq '.workflow_runs | sort_by(.created_at) | reverse | .[3:][] | select(.status == "completed") | .id' \
+          | while read -r id; do
+              gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/runs/$id" && echo "Deleted run $id"
+            done
