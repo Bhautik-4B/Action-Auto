@@ -20,6 +20,9 @@ on:
       apk_release_tag:
         description: Release tag in Game-Auto to download the APK from (empty = latest release, falls back to apk/ folder)
         default: ""
+      loop_minutes:
+        description: Loop script only - start no new account after this many minutes
+        default: "80"
       new_guest:
         description: Start with a new guest account (false = continue the guest saved by the last run)
         type: boolean
@@ -35,6 +38,7 @@ concurrency:
 
 env:
   PRIVATE_REPO: Bhautik-4B/Game-Auto
+  LOOP_MINUTES: ${{ inputs.loop_minutes }}
 
 jobs:
   phase1:
