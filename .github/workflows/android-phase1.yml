@@ -20,6 +20,10 @@ on:
       apk_release_tag:
         description: Release tag in Game-Auto to download the APK from (empty = latest release, falls back to apk/ folder)
         default: ""
+      new_guest:
+        description: Start with a new guest account (false = continue the guest saved by the last run)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -69,6 +73,21 @@ jobs:
           echo "RUN_SCRIPT=$(basename "$SCRIPT_IN")" >> "$GITHUB_ENV"
           ls -lh "$RUNNER_TEMP/apk"
 
+      - name: Get saved guest (branch "state")
+        if: ${{ !inputs.new_guest }}
+        env:
+          TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          URL="https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
+          if git clone -q --depth 1 --branch state "$URL" state-repo 2>/dev/null && [ -f state-repo/guest_state.tgz ]; then
+            cp state-repo/guest_state.tgz "$RUNNER_TEMP/guest_state_in.tgz"
+            echo "GUEST_STATE_IN=$RUNNER_TEMP/guest_state_in.tgz" >> "$GITHUB_ENV"
+            echo "Continuing the saved guest"
+          else
+            echo "No saved guest yet; the game will create a new one"
+          fi
+          rm -rf state-repo
+
       - name: Install OCR tools
         # "apt-get update" alone can take several minutes; run it only if the
         # install fails on the runner image's package lists.
@@ -89,6 +108,21 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot
           disable-animations: true
           script: bash "private/scripts/$RUN_SCRIPT" "$APK_PATH" "$OUT_DIR"
+
+      - name: Save guest to private repo (branch "state")
+        if: always()
+        env:
+          TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          [ -f "$OUT_DIR/guest_state.tgz" ] || { echo "No guest state to save"; exit 0; }
+          mkdir state-out && mv "$OUT_DIR/guest_state.tgz" state-out/ && cd state-out
+          # One commit only: the branch keeps just the latest guest.
+          git init -q -b state
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add guest_state.tgz && git commit -q -m "Guest state from run ${GITHUB_RUN_ID}"
+          git push -q -f "https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git" state
+          echo "Guest saved; the next run continues it unless new_guest is set"
 
       - name: Save results to private repo (branch "results")
         if: always()
