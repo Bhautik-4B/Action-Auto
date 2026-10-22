@@ -70,9 +70,12 @@ jobs:
           ls -lh "$RUNNER_TEMP/apk"
 
       - name: Install OCR tools
+        # "apt-get update" alone can take several minutes; run it only if the
+        # install fails on the runner image's package lists.
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq tesseract-ocr imagemagick >/dev/null
+          PKGS="tesseract-ocr imagemagick"
+          sudo apt-get install -y -qq --no-install-recommends $PKGS >/dev/null \
+            || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends $PKGS >/dev/null; }
 
       - name: Run Phase 1 on emulator
         uses: reactivecircus/android-emulator-runner@v2
