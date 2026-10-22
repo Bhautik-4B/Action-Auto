@@ -41,6 +41,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
+      # The emulator snapshot cache unpacks to its full disk + memory size, and the
+      # Android system image needs room too; the runner's preinstalled .NET, GHC,
+      # CodeQL and Boost are not used here, so free that space first.
+      - name: Free disk space
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost &
+          wait
+          df -h / | tail -1
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -107,7 +117,7 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-${{ inputs.api_level }}-pixel4-v1
+          key: avd-${{ inputs.api_level }}-pixel4-r3g-d4g-v2
 
       - name: Create emulator snapshot (first run only)
         if: steps.avd-cache.outputs.cache-hit != 'true'
@@ -117,8 +127,8 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_4
-          ram-size: 4096M
-          disk-size: 8G
+          ram-size: 3072M
+          disk-size: 4G
           force-avd-creation: false
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: false
@@ -131,8 +141,8 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_4
-          ram-size: 4096M
-          disk-size: 8G
+          ram-size: 3072M
+          disk-size: 4G
           force-avd-creation: false
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save
           disable-animations: true
