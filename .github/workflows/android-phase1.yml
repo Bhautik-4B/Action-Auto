@@ -148,13 +148,10 @@ jobs:
           disable-animations: true
           script: bash "private/scripts/$RUN_SCRIPT" "$APK_PATH" "$OUT_DIR"
 
-      # What happens to the guest accounts after the run, from result.json:
-      #   every account that reached the target (balance >= target) is archived for
-      #     good on branch "accounts" (only ever added to, never deleted). The loop
-      #     script puts them in $OUT_DIR/accounts/; the single-account script leaves
-      #     guest_state.tgz with status target_reached.
-      #   last status target_reached or balance_zero: nothing to continue, so branch
-      #     "state" is deleted and the next run starts a new guest
+      # What happens to the guest account after the run, from result.json:
+      #   target_reached (balance >= target): archived for good on branch "accounts"
+      #     (only ever added to, never deleted)
+      #   balance_zero: nothing to continue, so branch "state" is deleted
       #   anything else: guest_state.tgz is kept on branch "state" for the next run
       - name: Archive, drop or keep the guest
         if: always()
