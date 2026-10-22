@@ -167,10 +167,14 @@ jobs:
           cd results-repo
           find "$OUT_DIR" -name "*.ocr-*.json" -delete
           mkdir -p "$RUN_DIR" && cp -r "$OUT_DIR"/. "$RUN_DIR"/
+          # Keep only the newest 3 run folders (names start with the date).
+          ls -1d runs/*/ | sort | head -n -3 | while read -r d; do rm -rf "$d"; echo "Removed old results $d"; done
+          # One fresh commit, force-pushed, so the removed screenshots don't stay in history.
+          rm -rf .git && git init -q -b results && git remote add origin "$URL"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A && git commit -q -m "Phase 1 results: $RUN_DIR"
-          git push -q origin results
+          git add -A && git commit -q -m "Results: newest 3 runs, latest $RUN_DIR"
+          git push -q -f origin results
           {
             echo "### Phase 1 finished"
             echo "Results saved to the private repo, branch \`results\`, folder \`$RUN_DIR\`."
