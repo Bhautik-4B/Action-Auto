@@ -15,16 +15,13 @@ on:
         description: Branch of Game-Auto to take scripts/APK from
         default: main
       script:
-        description: Script in Game-Auto/scripts to run (run_dragon_tiger_loop.sh = one account after another on the same machine)
-        default: run_dragon_tiger_loop.sh
+        description: Script in Game-Auto/scripts to run
+        default: run_dragon_tiger_chip5_continue.sh
       apk_release_tag:
         description: Release tag in Game-Auto to download the APK from (empty = latest release, falls back to apk/ folder)
         default: ""
-      loop_minutes:
-        description: Loop script only - start no new account after this many minutes
-        default: "80"
       new_guest:
-        description: Start with a new guest account (false = continue the guest saved by the last run)
+        description: Ignore the saved guest (false = continue the guest saved by the last run)
         type: boolean
         default: false
 
@@ -38,7 +35,6 @@ concurrency:
 
 env:
   PRIVATE_REPO: Bhautik-4B/Game-Auto
-  LOOP_MINUTES: ${{ inputs.loop_minutes }}
 
 jobs:
   phase1:
