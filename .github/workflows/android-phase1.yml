@@ -96,6 +96,33 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends $PKGS >/dev/null \
             || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends $PKGS >/dev/null; }
 
+      # A booted emulator snapshot is cached between runs, so the emulator starts
+      # in seconds instead of a full cold boot. The first run (or a new API
+      # level) creates it once.
+      - name: Emulator snapshot cache
+        uses: actions/cache@v4
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-${{ inputs.api_level }}-pixel4-v1
+
+      - name: Create emulator snapshot (first run only)
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ inputs.api_level }}
+          target: google_apis
+          arch: x86_64
+          profile: pixel_4
+          ram-size: 4096M
+          disk-size: 8G
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: false
+          script: echo "Emulator snapshot created for the cache"
+
       - name: Run Phase 1 on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -105,7 +132,8 @@ jobs:
           profile: pixel_4
           ram-size: 4096M
           disk-size: 8G
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save
           disable-animations: true
           script: bash "private/scripts/$RUN_SCRIPT" "$APK_PATH" "$OUT_DIR"
 
