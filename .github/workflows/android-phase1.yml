@@ -138,20 +138,51 @@ jobs:
           disable-animations: true
           script: bash "private/scripts/$RUN_SCRIPT" "$APK_PATH" "$OUT_DIR"
 
-      - name: Save guest to private repo (branch "state")
+      # What happens to the guest account after the run, from result.json:
+      #   target_reached (balance >= target): archive it for good on branch
+      #     "accounts" (only ever added to, never deleted) and start a new guest next time
+      #   balance_zero: drop it; the next run starts a new guest
+      #   anything else: keep it on branch "state"; the next run continues it
+      - name: Archive, drop or keep the guest
         if: always()
         env:
           TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: |
-          [ -f "$OUT_DIR/guest_state.tgz" ] || { echo "No guest state to save"; exit 0; }
-          mkdir state-out && mv "$OUT_DIR/guest_state.tgz" state-out/ && cd state-out
-          # One commit only: the branch keeps just the latest guest.
-          git init -q -b state
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add guest_state.tgz && git commit -q -m "Guest state from run ${GITHUB_RUN_ID}"
-          git push -q -f "https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git" state
-          echo "Guest saved; the next run continues it unless new_guest is set"
+          URL="https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          field() { sed -n "s/.*\"$1\": \"\{0,1\}\([^\",}]*\).*/\1/p" "$OUT_DIR/result.json" 2>/dev/null || true; }
+          STATUS="$(field status)"; BAL="$(field end_balance)"; GID="$(field guest_id)"
+          echo "Run status: ${STATUS:-none}, balance: ${BAL:-?}"
+          drop_state() {  # delete branch "state" (needs a local repo to push from)
+            rm -rf drop && git init -q drop && { git -C drop push -q "$URL" --delete state 2>/dev/null || true; }; rm -rf drop
+          }
+
+          if [ "$STATUS" = target_reached ] && [ -f "$OUT_DIR/guest_state.tgz" ]; then
+            NAME="$(date -u +%Y%m%d-%H%M%S)-guest${GID:-unknown}-INR${BAL}"
+            if git clone -q --depth 1 --branch accounts "$URL" acc 2>/dev/null; then cd acc
+            else mkdir acc && cd acc && git init -q -b accounts && git remote add origin "$URL"
+              printf 'date,guest_id,balance,file,run\n' > index.csv; fi
+            mkdir -p accounts && cp "$OUT_DIR/guest_state.tgz" "accounts/$NAME.tgz"
+            cp "$OUT_DIR/result.json" "accounts/$NAME.json"
+            echo "$(date -u +%Y-%m-%d),${GID},${BAL},accounts/$NAME.tgz,${GITHUB_RUN_ID}" >> index.csv
+            git add -A && git commit -q -m "Archive account $NAME"
+            git push -q origin accounts   # plain push: never overwrites archived accounts
+            cd .. && drop_state
+            echo "Account archived as accounts/$NAME.tgz (branch accounts); next run starts a new guest" | tee -a "$GITHUB_STEP_SUMMARY"
+          elif [ "$STATUS" = balance_zero ]; then
+            drop_state
+            echo "Balance 0: guest dropped; next run starts a new guest" | tee -a "$GITHUB_STEP_SUMMARY"
+          elif [ -f "$OUT_DIR/guest_state.tgz" ]; then
+            mkdir state-out && cp "$OUT_DIR/guest_state.tgz" state-out/ && cd state-out
+            # One commit only: the branch keeps just the current guest.
+            git init -q -b state && git add guest_state.tgz && git commit -q -m "Guest state from run ${GITHUB_RUN_ID}"
+            git push -q -f "$URL" state
+            echo "Guest kept; next run continues it (balance ${BAL:-?})" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No guest state to save"
+          fi
+          rm -f "$OUT_DIR/guest_state.tgz"
 
       - name: Save results to private repo (branch "results")
         if: always()
@@ -167,14 +198,10 @@ jobs:
           cd results-repo
           find "$OUT_DIR" -name "*.ocr-*.json" -delete
           mkdir -p "$RUN_DIR" && cp -r "$OUT_DIR"/. "$RUN_DIR"/
-          # Keep only the newest 3 run folders (names start with the date).
-          ls -1d runs/*/ | sort | head -n -3 | while read -r d; do rm -rf "$d"; echo "Removed old results $d"; done
-          # One fresh commit, force-pushed, so the removed screenshots don't stay in history.
-          rm -rf .git && git init -q -b results && git remote add origin "$URL"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A && git commit -q -m "Results: newest 3 runs, latest $RUN_DIR"
-          git push -q -f origin results
+          git add -A && git commit -q -m "Phase 1 results: $RUN_DIR"
+          git push -q origin results
           {
             echo "### Phase 1 finished"
             echo "Results saved to the private repo, branch \`results\`, folder \`$RUN_DIR\`."
