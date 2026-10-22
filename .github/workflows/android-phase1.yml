@@ -4,10 +4,25 @@ name: Android Phase 1 - Guest to Lobby
 # screenshots live in the PRIVATE repo Bhautik-4B/Game-Auto, reached with the
 # PRIVATE_REPO_TOKEN secret. Nothing private is uploaded here: logs of public
 # repos are public, so keep secrets out of echo statements.
+#
+# One run starts up to two DEVICES at the same time (job "device 1" and
+# "device 2", each on its own machine). A device is an emulator restored from
+# its own cached snapshot, so it keeps the same identity and the same guest
+# account from run to run; its saved login lives on branch "state-<device>".
 
 on:
   workflow_dispatch:
     inputs:
+      devices:
+        description: How many devices (parallel jobs) to run, 1 or 2
+        type: choice
+        options: ["1", "2"]
+        default: "2"
+      bet_side:
+        description: Side both devices bet on
+        type: choice
+        options: [dragon, tiger]
+        default: dragon
       api_level:
         description: Android API level of the emulator (30+ can run ARM-only games)
         default: "30"
@@ -21,7 +36,7 @@ on:
         description: Release tag in Game-Auto to download the APK from (empty = latest release, falls back to apk/ folder)
         default: ""
       new_guest:
-        description: Ignore the saved guest (false = continue the guest saved by the last run)
+        description: Ignore the saved login (false = continue the account saved by the last run)
         type: boolean
         default: false
 
@@ -38,8 +53,16 @@ env:
 
 jobs:
   phase1:
+    name: device ${{ matrix.device }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    strategy:
+      fail-fast: false       # one device failing must not cancel the other
+      matrix:
+        # [1] or [1, 2], from the "devices" input
+        device: ${{ fromJSON(inputs.devices == '1' && '[1]' || '[1, 2]') }}
+    env:
+      DEVICE: ${{ matrix.device }}
     steps:
       # The emulator snapshot cache unpacks to its full disk + memory size, and the
       # Android system image needs room too; the runner's preinstalled .NET, GHC,
@@ -84,18 +107,18 @@ jobs:
           echo "RUN_SCRIPT=$(basename "$SCRIPT_IN")" >> "$GITHUB_ENV"
           ls -lh "$RUNNER_TEMP/apk"
 
-      - name: Get saved guest (branch "state")
+      - name: Get saved login (branch "state-<device>")
         if: ${{ !inputs.new_guest }}
         env:
           TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: |
           URL="https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
-          if git clone -q --depth 1 --branch state "$URL" state-repo 2>/dev/null && [ -f state-repo/guest_state.tgz ]; then
+          if git clone -q --depth 1 --branch "state-$DEVICE" "$URL" state-repo 2>/dev/null && [ -f state-repo/guest_state.tgz ]; then
             cp state-repo/guest_state.tgz "$RUNNER_TEMP/guest_state_in.tgz"
             echo "GUEST_STATE_IN=$RUNNER_TEMP/guest_state_in.tgz" >> "$GITHUB_ENV"
-            echo "Continuing the saved guest"
+            echo "Device $DEVICE: continuing the saved account"
           else
-            echo "No saved guest yet; the game will create a new one"
+            echo "Device $DEVICE: no saved login; the game signs this device in"
           fi
           rm -rf state-repo
 
@@ -108,8 +131,8 @@ jobs:
             || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends $PKGS >/dev/null; }
 
       # A booted emulator snapshot is cached between runs, so the emulator starts
-      # in seconds instead of a full cold boot. The first run (or a new API
-      # level) creates it once.
+      # in seconds instead of a full cold boot. Each device has its own snapshot
+      # (and so its own identity); the first run of a device creates it once.
       - name: Emulator snapshot cache
         uses: actions/cache@v4
         id: avd-cache
@@ -117,7 +140,7 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-${{ inputs.api_level }}-pixel4-r3g-d4g-v2
+          key: avd-${{ inputs.api_level }}-pixel4-r3g-d4g-device${{ matrix.device }}-v1
 
       - name: Create emulator snapshot (first run only)
         if: steps.avd-cache.outputs.cache-hit != 'true'
@@ -136,6 +159,8 @@ jobs:
 
       - name: Run Phase 1 on emulator
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          BET_SIDE: ${{ inputs.bet_side }}
         with:
           api-level: ${{ inputs.api_level }}
           target: google_apis
@@ -148,12 +173,14 @@ jobs:
           disable-animations: true
           script: bash "private/scripts/$RUN_SCRIPT" "$APK_PATH" "$OUT_DIR"
 
-      # What happens to the guest account after the run, from result.json:
+      # What happens to this device's account after the run, from result.json:
       #   target_reached (balance >= target): archived for good on branch "accounts"
       #     (only ever added to, never deleted)
-      #   balance_zero: nothing to continue, so branch "state" is deleted
-      #   anything else: guest_state.tgz is kept on branch "state" for the next run
-      - name: Archive, drop or keep the guest
+      #   balance_zero: the saved login is removed (branch "state-<device>" deleted)
+      #   anything else: guest_state.tgz is kept on branch "state-<device>"
+      # Two devices may finish at the same moment, so pushes to the shared
+      # "accounts" branch are retried after pulling.
+      - name: Archive, drop or keep the account
         if: always()
         env:
           TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
@@ -163,79 +190,93 @@ jobs:
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           field() { sed -n "s/.*\"$1\": \"\{0,1\}\([^\",}]*\).*/\1/p" "$2" 2>/dev/null || true; }
           STATUS="$(field status "$OUT_DIR/result.json")"
-          echo "Run status: ${STATUS:-none}"
-          drop_state() {  # delete branch "state" (needs a local repo to push from)
-            rm -rf drop && git init -q drop && { git -C drop push -q "$URL" --delete state 2>/dev/null || true; }; rm -rf drop
+          echo "Device $DEVICE run status: ${STATUS:-none}"
+          drop_state() {  # delete this device's state branch (needs a local repo to push from)
+            rm -rf drop && git init -q drop && { git -C drop push -q "$URL" --delete "state-$DEVICE" 2>/dev/null || true; }; rm -rf drop
           }
           ACC="$OUT_DIR/accounts"; mkdir -p "$ACC"
           if [ "$STATUS" = target_reached ] && [ -f "$OUT_DIR/guest_state.tgz" ]; then
-            NAME="$(date -u +%Y%m%d-%H%M%S)-guest$(field guest_id "$OUT_DIR/result.json")-INR$(field end_balance "$OUT_DIR/result.json")"
+            NAME="$(date -u +%Y%m%d-%H%M%S)-device${DEVICE}-guest$(field guest_id "$OUT_DIR/result.json")-INR$(field end_balance "$OUT_DIR/result.json")"
             mv "$OUT_DIR/guest_state.tgz" "$ACC/$NAME.tgz" && cp "$OUT_DIR/result.json" "$ACC/$NAME.json"
           fi
 
           if ls "$ACC"/*.tgz >/dev/null 2>&1; then
-            if git clone -q --depth 1 --branch accounts "$URL" acc 2>/dev/null; then :
-            else mkdir acc && git -C acc init -q -b accounts && git -C acc remote add origin "$URL"
-              printf 'date,guest_id,balance,file,run\n' > acc/index.csv; fi
-            mkdir -p acc/accounts
-            for f in "$ACC"/*.tgz; do
-              NAME="$(basename "$f" .tgz)"; J="$ACC/$NAME.json"
-              cp "$f" "acc/accounts/$NAME.tgz"; [ -f "$J" ] && cp "$J" "acc/accounts/$NAME.json"
-              echo "$(date -u +%Y-%m-%d),$(field guest_id "$J"),$(field end_balance "$J"),accounts/$NAME.tgz,${GITHUB_RUN_ID}" >> acc/index.csv
-              echo "Archived account accounts/$NAME.tgz" | tee -a "$GITHUB_STEP_SUMMARY"
+            for attempt in 1 2 3 4 5; do
+              rm -rf acc
+              if git clone -q --depth 1 --branch accounts "$URL" acc 2>/dev/null; then :
+              else mkdir acc && git -C acc init -q -b accounts && git -C acc remote add origin "$URL"
+                printf 'date,device,guest_id,balance,file,run\n' > acc/index.csv; fi
+              mkdir -p acc/accounts
+              for f in "$ACC"/*.tgz; do
+                NAME="$(basename "$f" .tgz)"; J="$ACC/$NAME.json"
+                cp "$f" "acc/accounts/$NAME.tgz"; [ -f "$J" ] && cp "$J" "acc/accounts/$NAME.json"
+                echo "$(date -u +%Y-%m-%d),$DEVICE,$(field guest_id "$J"),$(field end_balance "$J"),accounts/$NAME.tgz,${GITHUB_RUN_ID}" >> acc/index.csv
+              done
+              git -C acc add -A && git -C acc commit -q -m "Archive account from run ${GITHUB_RUN_ID}, device $DEVICE"
+              # Plain push, never forced: archived accounts are never overwritten.
+              if git -C acc push -q origin accounts; then
+                for f in "$ACC"/*.tgz; do echo "Archived account accounts/$(basename "$f")" | tee -a "$GITHUB_STEP_SUMMARY"; done
+                rm -f "$ACC"/*.tgz; break
+              fi
+              echo "accounts branch changed under us (other device?), retry $attempt"; sleep $((attempt * 5))
             done
-            git -C acc add -A && git -C acc commit -q -m "Archive accounts from run ${GITHUB_RUN_ID}"
-            git -C acc push -q origin accounts   # plain push: never overwrites archived accounts
-            rm -f "$ACC"/*.tgz
+            ls "$ACC"/*.tgz >/dev/null 2>&1 && echo "::error::Could not push to branch accounts after 5 attempts; account kept in results"
           fi
 
           case "$STATUS" in
-            target_reached|balance_zero)
+            target_reached)
               drop_state
-              echo "Last account finished (${STATUS}); next run starts a new guest" | tee -a "$GITHUB_STEP_SUMMARY" ;;
+              echo "Device $DEVICE: account archived; saved login cleared" | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            balance_zero)
+              drop_state
+              echo "Device $DEVICE: balance 0; saved login removed" | tee -a "$GITHUB_STEP_SUMMARY" ;;
             *)
               if [ -f "$OUT_DIR/guest_state.tgz" ]; then
                 rm -rf state-out && mkdir state-out && cp "$OUT_DIR/guest_state.tgz" state-out/
-                # One commit only: the branch keeps just the current guest.
-                git -C state-out init -q -b state && git -C state-out add guest_state.tgz \
-                  && git -C state-out commit -q -m "Guest state from run ${GITHUB_RUN_ID}"
-                git -C state-out push -q -f "$URL" state
-                echo "Guest kept (${STATUS:-no status}); next run continues it" | tee -a "$GITHUB_STEP_SUMMARY"
+                # One commit only: the branch keeps just the current login.
+                git -C state-out init -q -b "state-$DEVICE" && git -C state-out add guest_state.tgz \
+                  && git -C state-out commit -q -m "Device $DEVICE login from run ${GITHUB_RUN_ID}"
+                git -C state-out push -q -f "$URL" "state-$DEVICE"
+                echo "Device $DEVICE: account kept (${STATUS:-no status}); next run continues it" | tee -a "$GITHUB_STEP_SUMMARY"
               else
-                echo "No guest state to save"
+                echo "Device $DEVICE: no login to save"
               fi ;;
           esac
           rm -f "$OUT_DIR/guest_state.tgz"
 
+      # Both devices push their folder to the same branch, so the push is retried
+      # after pulling if the other device got there first.
       - name: Save results to private repo (branch "results")
         if: always()
         env:
           TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: |
           [ -d "$OUT_DIR" ] || { echo "No output to save"; exit 0; }
-          RUN_DIR="runs/$(date -u +%Y%m%d-%H%M%S)-${RUN_SCRIPT%.sh}-run${GITHUB_RUN_ID}"
+          RUN_DIR="runs/$(date -u +%Y%m%d-%H%M%S)-${RUN_SCRIPT%.sh}-run${GITHUB_RUN_ID}-device${DEVICE}"
           URL="https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
-          if ! git clone -q --depth 1 --branch results "$URL" results-repo 2>/dev/null; then
-            mkdir results-repo && cd results-repo && git init -q -b results && git remote add origin "$URL" && cd ..
-          fi
-          cd results-repo
           find "$OUT_DIR" -name "*.ocr-*.json" -delete
-          mkdir -p "$RUN_DIR" && cp -r "$OUT_DIR"/. "$RUN_DIR"/
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A && git commit -q -m "Phase 1 results: $RUN_DIR"
-          git push -q origin results
+          for attempt in 1 2 3 4 5; do
+            rm -rf results-repo
+            if ! git clone -q --depth 1 --branch results "$URL" results-repo 2>/dev/null; then
+              mkdir results-repo && git -C results-repo init -q -b results && git -C results-repo remote add origin "$URL"
+            fi
+            mkdir -p "results-repo/$RUN_DIR" && cp -r "$OUT_DIR"/. "results-repo/$RUN_DIR"/
+            git -C results-repo add -A && git -C results-repo commit -q -m "Phase 1 results: $RUN_DIR"
+            git -C results-repo push -q origin results && break
+            echo "results branch changed under us (other device?), retry $attempt"; sleep $((attempt * 5))
+          done
           {
-            echo "### Phase 1 finished"
+            echo "### Device $DEVICE finished"
             echo "Results saved to the private repo, branch \`results\`, folder \`$RUN_DIR\`."
             echo
-            echo "Status: \`$(sed -n 's/.*"status": "\([^"]*\)".*/\1/p' "$RUN_DIR/result.json" 2>/dev/null)\`"
+            echo "Status: \`$(sed -n 's/.*"status": "\([^"]*\)".*/\1/p' "$OUT_DIR/result.json" 2>/dev/null)\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Keep only the newest 3 runs of this workflow in the Actions tab (this run
       # counts as one); older finished runs and their public logs are deleted.
+      # Done by device 1 only.
       - name: Delete old runs (keep newest 3)
-        if: always()
+        if: always() && matrix.device == 1
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
