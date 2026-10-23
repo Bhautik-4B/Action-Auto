@@ -139,9 +139,13 @@ jobs:
           find "$OUT_DIR" -name "*.ocr-*.json" -delete
           rm -f "$OUT_DIR/guest_state.tgz"  # logins are never stored in results
           echo "Saving results to branch results, folder $RUN_DIR"
+          # The results branch holds every old run (gigabytes), so clone it without
+          # file contents and check out only this run's (new, empty) folder.
           for attempt in 1 2 3 4 5; do
             rm -rf results-repo
-            if ! git clone -q --depth 1 --branch results "$URL" results-repo 2>/dev/null; then
+            if git clone -q --depth 1 --filter=blob:none --no-checkout --branch results "$URL" results-repo 2>/dev/null; then
+              git -C results-repo sparse-checkout set --no-cone "/$RUN_DIR/" && git -C results-repo checkout -q results
+            else
               mkdir results-repo && git -C results-repo init -q -b results && git -C results-repo remote add origin "$URL"
             fi
             mkdir -p "results-repo/$RUN_DIR" && cp -r "$OUT_DIR"/. "results-repo/$RUN_DIR"/
