@@ -304,6 +304,8 @@ jobs:
         run: |
           exec >>"$RUNNER_TEMP/workflow_log.txt" 2>&1
           OUT_DIR="${OUT_DIR:-$RUNNER_TEMP/out}"; mkdir -p "$OUT_DIR"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           RUN_DIR="runs/$(date -u +%Y%m%d-%H%M%S)-${RUN_SCRIPT%.sh}-run${GITHUB_RUN_ID}-device${DEVICE}"
           URL="https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
           find "$OUT_DIR" -name "*.ocr-*.json" -delete
