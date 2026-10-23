@@ -78,13 +78,24 @@ jobs:
             cp private/apk/*.apk "$RUNNER_TEMP/apk/" 2>/dev/null || { echo "::error::No APK found (release or apk/ folder in $PRIVATE_REPO)"; exit 1; }
             echo "APK taken from apk/ folder"
           fi
-          # Dual Space is installed on the device first, before the game APK.
-          ls "$RUNNER_TEMP"/apk/com.ludashi.dualspace_*.apk >/dev/null 2>&1 \
-            || gh release download APK --repo "$PRIVATE_REPO" --pattern 'com.ludashi.dualspace_*.apk' --dir "$RUNNER_TEMP/apk" \
-            || { echo "::error::Dual Space APK not found in release APK of $PRIVATE_REPO"; exit 1; }
-          DUALSPACE_APK="$(ls "$RUNNER_TEMP"/apk/com.ludashi.dualspace_*.apk | head -1)"
-          echo "DUALSPACE_APK=$DUALSPACE_APK" >> "$GITHUB_ENV"
-          APK="$(ls "$RUNNER_TEMP"/apk/*.apk | grep -v '/com\.ludashi\.dualspace_' | head -1)"
+          # The dual app Shelter (work profile) is installed first and the game is
+          # run as its copy there. It comes from release APK; the first time it is
+          # downloaded from F-Droid and added to that release. (Dual Space, also in
+          # the release, is not used: the game crashes inside it on the emulator.)
+          if ! ls "$RUNNER_TEMP"/apk/net.typeblog.shelter_*.apk >/dev/null 2>&1; then
+            gh release download APK --repo "$PRIVATE_REPO" --pattern 'net.typeblog.shelter_*.apk' --dir "$RUNNER_TEMP/apk" 2>/dev/null || true
+          fi
+          if ! ls "$RUNNER_TEMP"/apk/net.typeblog.shelter_*.apk >/dev/null 2>&1; then
+            VC="$(curl -fsSL https://f-droid.org/api/v1/packages/net.typeblog.shelter | python3 -c 'import sys, json; print(json.load(sys.stdin)["suggestedVersionCode"])')"
+            curl -fsSL -o "$RUNNER_TEMP/apk/net.typeblog.shelter_$VC.apk" "https://f-droid.org/repo/net.typeblog.shelter_$VC.apk" \
+              || { echo "::error::Shelter APK not in release APK and not downloadable from F-Droid"; exit 1; }
+            echo "Shelter $VC downloaded from F-Droid"
+            gh release upload APK "$RUNNER_TEMP/apk/net.typeblog.shelter_$VC.apk" --repo "$PRIVATE_REPO" \
+              && echo "Shelter added to release APK" || echo "Could not add Shelter to release APK (token needs contents: write)"
+          fi
+          SHELTER_APK="$(ls "$RUNNER_TEMP"/apk/net.typeblog.shelter_*.apk | head -1)"
+          echo "SHELTER_APK=$SHELTER_APK" >> "$GITHUB_ENV"
+          APK="$(ls "$RUNNER_TEMP"/apk/*.apk | grep -vE '/(com\.ludashi\.dualspace|net\.typeblog\.shelter)_' | head -1)"
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
           echo "OUT_DIR=$RUNNER_TEMP/out" >> "$GITHUB_ENV"
           echo "RUN_SCRIPT=run_explore_dragon_tiger.sh" >> "$GITHUB_ENV"
@@ -119,8 +130,8 @@ jobs:
           # step lines ("[12:34:56] ...") are also shown here, with guest IDs hidden
           # because this log is public.
           script: |
-            bash -c 'echo "Installing Dual Space: $(basename "$DUALSPACE_APK")" >>"$RUNNER_TEMP/workflow_log.txt"; adb install -r -g "$DUALSPACE_APK" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | grep -q Success && echo "[$(date -u +%H:%M:%S)] Dual Space installed" || { echo "::error::Dual Space install failed"; exit 1; }'
-            bash -o pipefail -c 'bash private/scripts/dualspace_clone.sh "$APK_PATH" "$OUT_DIR/dualspace" 5 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] (Clone|Dual Space RESULT)"; true; }'
+            bash -c 'echo "Installing Shelter: $(basename "$SHELTER_APK")" >>"$RUNNER_TEMP/workflow_log.txt"; adb install -r -g "$SHELTER_APK" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | grep -q Success && echo "[$(date -u +%H:%M:%S)] Shelter installed" || { echo "::error::Shelter install failed"; exit 1; }'
+            bash -o pipefail -c 'bash private/scripts/shelter_clone.sh "$APK_PATH" "$OUT_DIR/shelter" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] (Work profile|Shelter RESULT)"; true; }'
             bash -o pipefail -c 'bash "private/scripts/$RUN_SCRIPT" "$APK_PATH" "$OUT_DIR" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] " | grep --line-buffered -vE " step_[0-9]+ " | sed -u -E "s/(Guest ID: |guest|expected guest |but got )[0-9]+/\1***/g"; true; }'
 
       # If this device failed before its script could say so (e.g. the emulator
