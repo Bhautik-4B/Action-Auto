@@ -172,7 +172,8 @@ jobs:
 
   # Keep only the newest 3 runs of this workflow in the Actions tab (this run
   # counts as one); older finished runs and their public logs are deleted.
-  # Runs once, after both devices are done, whatever their result.
+  # Runs once, after both devices are done, whatever their result, and then
+  # starts the next run.
   cleanup:
     name: delete old runs
     needs: phase1
@@ -188,3 +189,14 @@ jobs:
           | while read -r id; do
               gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/runs/$id" && echo "Deleted run $id"
             done
+
+      # Start the next run as soon as this one is over (it queues behind this
+      # run, see "concurrency"). To stop the loop, set the repository variable
+      # AUTO_RESTART to 0 (Settings > Secrets and variables > Actions > Variables)
+      # or disable the workflow in the Actions tab.
+      - name: Start a new run
+        if: vars.AUTO_RESTART != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run android-phase1.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" && echo "Started a new run on $GITHUB_REF_NAME"
