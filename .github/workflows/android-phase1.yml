@@ -113,6 +113,16 @@ jobs:
           script: |
             bash -o pipefail -c 'bash "private/scripts/$RUN_SCRIPT" "$APK_PATH" "$OUT_DIR" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] " | grep --line-buffered -vE " step_[0-9]+ " | sed -u -E "s/(Guest ID: |guest|expected guest |but got )[0-9]+/\1***/g"; true; }'
 
+      # If this device failed before its script could say so (e.g. the emulator
+      # never started), tell the other device now, so it does not wait 15 minutes
+      # at the table for a partner that never comes (see sync_wait in the script).
+      - name: Tell the other device this one failed
+        if: failure()
+        run: |
+          exec >>"$RUNNER_TEMP/workflow_log.txt" 2>&1
+          git -C private push -q origin "HEAD:refs/heads/sync/${GITHUB_RUN_ID}/d${DEVICE}-failed" \
+            && echo "Sent sync/${GITHUB_RUN_ID}/d${DEVICE}-failed" || echo "Could not send the failed signal"
+
       # Both devices push their folder to the same branch, so the push is retried
       # after pulling if the other device got there first.
       - name: Save results to private repo (branch "results")
