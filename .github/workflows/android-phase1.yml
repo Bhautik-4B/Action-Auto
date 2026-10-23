@@ -31,13 +31,16 @@ jobs:
   phase1:
     name: device ${{ matrix.device }}
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 200
     strategy:
       fail-fast: false       # one device failing must not cancel the other
       matrix:
         device: [1, 2]
     env:
       DEVICE: ${{ matrix.device }}
+      # Copies of the game on each device (Shelter work profile + extra users),
+      # played one after another on the same emulator, a new guest in each.
+      COPIES: 5
     steps:
       # The Android system image needs room; the runner's preinstalled .NET, GHC,
       # CodeQL and Boost are not used here, so free that space first.
@@ -110,9 +113,10 @@ jobs:
             || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends $PKGS >/dev/null; }
 
       - name: Run Phase 1 on emulator
-        # A normal run takes 6-15 minutes; stop a stuck one (frozen emulator)
+        # One copy takes about 6-15 minutes and COPIES are played one after
+        # another; stop a stuck run (frozen emulator)
         # instead of letting it use the whole job. Results are still saved.
-        timeout-minutes: 40
+        timeout-minutes: 170
         uses: reactivecircus/android-emulator-runner@v2
         env:
           FRESH_START: "1"
@@ -131,8 +135,8 @@ jobs:
           # because this log is public.
           script: |
             bash -c 'echo "Installing Shelter: $(basename "$SHELTER_APK")" >>"$RUNNER_TEMP/workflow_log.txt"; adb install -r -g "$SHELTER_APK" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | grep -q Success && echo "[$(date -u +%H:%M:%S)] Shelter installed" || { echo "::error::Shelter install failed"; exit 1; }'
-            bash -o pipefail -c 'bash private/scripts/shelter_clone.sh "$APK_PATH" "$OUT_DIR/shelter" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] (Work profile|Shelter RESULT)"; true; }'
-            bash -o pipefail -c 'bash "private/scripts/$RUN_SCRIPT" "$APK_PATH" "$OUT_DIR" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] " | grep --line-buffered -vE " step_[0-9]+ " | sed -u -E "s/(Guest ID: |guest|expected guest |but got )[0-9]+/\1***/g"; true; }'
+            bash -o pipefail -c 'bash private/scripts/shelter_clone.sh "$APK_PATH" "$OUT_DIR/shelter" "$COPIES" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] (Work profile|Copy [0-9]|Shelter RESULT)"; true; }'
+            bash -o pipefail -c 'RUN_SCRIPT="$RUN_SCRIPT" bash private/scripts/run_copies.sh "$APK_PATH" "$OUT_DIR" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] " | grep --line-buffered -vE " step_[0-9]+ " | sed -u -E "s/(Guest ID: |guest|expected guest |but got )[0-9]+/\1***/g"; true; }'
 
       # If this device failed before its script could say so (e.g. the emulator
       # never started), tell the other device now, so it does not wait 15 minutes
@@ -158,7 +162,7 @@ jobs:
           RUN_DIR="runs/$(date -u +%Y%m%d-%H%M%S)-${RUN_SCRIPT%.sh}-run${GITHUB_RUN_ID}-device${DEVICE}"
           URL="https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
           find "$OUT_DIR" -name "*.ocr-*.json" -delete
-          rm -f "$OUT_DIR/guest_state.tgz"  # logins are never stored in results
+          find "$OUT_DIR" -name guest_state.tgz -delete  # logins are never stored in results (any copy)
           echo "Saving results to branch results, folder $RUN_DIR"
           # The results branch holds every old run (gigabytes), so clone it without
           # file contents and check out only this run's (new, empty) folder.
