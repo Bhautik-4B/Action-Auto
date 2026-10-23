@@ -104,7 +104,11 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save
           disable-animations: true
-          script: bash "private/scripts/$RUN_SCRIPT" "$APK_PATH" "$OUT_DIR" >>"$RUNNER_TEMP/workflow_log.txt" 2>&1
+          # Full output goes to workflow_log.txt (private results); the script's own
+          # step lines ("[12:34:56] ...") are also shown here, with guest IDs hidden
+          # because this log is public.
+          script: |
+            bash -o pipefail -c 'bash "private/scripts/$RUN_SCRIPT" "$APK_PATH" "$OUT_DIR" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] " | grep --line-buffered -vE " step_[0-9]+ " | sed -u -E "s/(Guest ID: |guest|expected guest |but got )[0-9]+/\1***/g"; true; }'
 
       # Both devices push their folder to the same branch, so the push is retried
       # after pulling if the other device got there first.
