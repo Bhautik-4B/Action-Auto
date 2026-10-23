@@ -155,24 +155,28 @@ jobs:
             echo "results branch changed under us (other device?), retry $attempt"; sleep $((attempt * 5))
           done
 
-      # Keep only the newest 3 runs of this workflow in the Actions tab (this run
-      # counts as one); older finished runs and their public logs are deleted.
-      # Done by device 1 only.
-      - name: Delete old runs (keep newest 3)
-        if: always() && matrix.device == 1
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          exec >>"$RUNNER_TEMP/workflow_log.txt" 2>&1
-          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/android-phase1.yml/runs?per_page=100" \
-            --jq '.workflow_runs | sort_by(.created_at) | reverse | .[3:][] | select(.status == "completed") | .id' \
-          | while read -r id; do
-              gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/runs/$id" && echo "Deleted run $id"
-            done
-
       # The only line this device prints to the public log and summary.
       - name: Status
         if: always()
         run: |
           S="$(sed -n 's/.*"status": "\([^"]*\)".*/\1/p' "$RUNNER_TEMP/out/result.json" 2>/dev/null)"; S="${S:-failed}"
           echo "Device $DEVICE: $S" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # Keep only the newest 3 runs of this workflow in the Actions tab (this run
+  # counts as one); older finished runs and their public logs are deleted.
+  # Runs once, after both devices are done, whatever their result.
+  cleanup:
+    name: delete old runs
+    needs: phase1
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete old runs (keep newest 3)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/android-phase1.yml/runs?per_page=100" \
+            --jq '.workflow_runs | sort_by(.created_at) | reverse | .[3:][] | select(.status == "completed") | .id' \
+          | while read -r id; do
+              gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/runs/$id" && echo "Deleted run $id"
+            done
