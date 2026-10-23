@@ -16,7 +16,7 @@ name: Android Phase 1 - Guest to Lobby
 #
 # fresh_start (the default) skips all of that: a new emulator every run (no
 # cache), no saved login, nothing kept afterwards, so the game makes a new
-# guest each time. Fresh-start runs never bet (FRESH_START=1 in the scripts).
+# guest each time. Fresh-start runs always bet (FRESH_START=1 turns betting on).
 
 on:
   workflow_dispatch:
