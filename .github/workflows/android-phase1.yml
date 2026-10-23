@@ -194,10 +194,10 @@ jobs:
 
       # Start the next run as soon as this one is over (it queues behind this
       # run, see "concurrency"). To stop the loop, set the repository variable
-      # AUTO_RESTART to 0 (Settings > Secrets and variables > Actions > Variables)
+      # AUTO_RESTART to off (Settings > Secrets and variables > Actions > Variables)
       # or disable the workflow in the Actions tab.
       - name: Start a new run
-        if: vars.AUTO_RESTART != '0'
+        if: vars.AUTO_RESTART != 'off'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
