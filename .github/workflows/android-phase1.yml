@@ -212,4 +212,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh workflow run android-phase1.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" && echo "Started a new run on $GITHUB_REF_NAME"
+          # Always on main, whatever branch this run used (a run started by hand
+          # on a test branch used to keep the whole loop on that branch).
+          gh workflow run android-phase1.yml --repo "$GITHUB_REPOSITORY" --ref main && echo "Started a new run on main"
