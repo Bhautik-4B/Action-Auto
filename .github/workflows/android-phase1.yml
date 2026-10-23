@@ -91,6 +91,9 @@ jobs:
             || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends $PKGS >/dev/null; }
 
       - name: Run Phase 1 on emulator
+        # A normal run takes 6-15 minutes; stop a stuck one (frozen emulator)
+        # instead of letting it use the whole job. Results are still saved.
+        timeout-minutes: 40
         uses: reactivecircus/android-emulator-runner@v2
         env:
           FRESH_START: "1"
