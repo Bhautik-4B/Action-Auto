@@ -13,6 +13,10 @@ name: Android Phase 1 - Guest to Lobby
 # account from run to run; its saved login lives on branch "state-<device>".
 # A device whose guest drops under INR 5 is retired (branch "retired") and
 # never opened again.
+#
+# fresh_start (the default) skips all of that: a new emulator every run (no
+# cache), no saved login, nothing kept afterwards, so the game makes a new
+# guest each time. Fresh-start runs never bet (FRESH_START=1 in the scripts).
 
 on:
   workflow_dispatch:
@@ -35,7 +39,7 @@ on:
         default: main
       script:
         description: Script in Game-Auto/scripts to run
-        default: run_dragon_tiger_chip5_continue.sh
+        default: run_explore_dragon_tiger.sh
       apk_release_tag:
         description: Release tag in Game-Auto to download the APK from (empty = latest release, falls back to apk/ folder)
         default: ""
@@ -43,6 +47,10 @@ on:
         description: Ignore the saved login (false = continue the account saved by the last run)
         type: boolean
         default: false
+      fresh_start:
+        description: New emulator and new guest every run, nothing saved; never bets (uncheck to bet with the saved account)
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -71,6 +79,7 @@ jobs:
       # A retired device (guest balance fell under 5) is skipped for good.
       # Delete its file on branch "retired" to use it again.
       - name: Check device
+        if: ${{ !inputs.fresh_start }}
         env:
           TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: |
@@ -132,7 +141,7 @@ jobs:
           echo "RUN_SCRIPT=$(basename "$SCRIPT_IN")" >> "$GITHUB_ENV"
 
       - name: Get saved login (branch "state-<device>")
-        if: env.RETIRED != '1' && !inputs.new_guest
+        if: env.RETIRED != '1' && !inputs.new_guest && !inputs.fresh_start
         env:
           TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: |
@@ -161,7 +170,7 @@ jobs:
       # in seconds instead of a full cold boot. Each device has its own snapshot
       # (and so its own identity); the first run of a device creates it once.
       - name: Emulator snapshot cache
-        if: env.RETIRED != '1'
+        if: env.RETIRED != '1' && !inputs.fresh_start
         uses: actions/cache@v4
         id: avd-cache
         with:
@@ -171,7 +180,7 @@ jobs:
           key: avd-${{ inputs.api_level }}-pixel4-r3g-d4g-device${{ matrix.device }}-v1
 
       - name: Create emulator snapshot (first run only)
-        if: env.RETIRED != '1' && steps.avd-cache.outputs.cache-hit != 'true'
+        if: env.RETIRED != '1' && !inputs.fresh_start && steps.avd-cache.outputs.cache-hit != 'true'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ inputs.api_level }}
@@ -190,6 +199,7 @@ jobs:
         uses: reactivecircus/android-emulator-runner@v2
         env:
           BET_SIDE: ${{ inputs.bet_side }}
+          FRESH_START: ${{ inputs.fresh_start && '1' || '0' }}
         with:
           api-level: ${{ inputs.api_level }}
           target: google_apis
@@ -212,7 +222,7 @@ jobs:
       # Two devices may finish at the same moment, so pushes to the shared
       # "accounts" and "retired" branches are retried after pulling.
       - name: Archive, drop or keep the account
-        if: always() && env.RETIRED != '1'
+        if: always() && env.RETIRED != '1' && !inputs.fresh_start
         env:
           TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: |
@@ -297,6 +307,7 @@ jobs:
           RUN_DIR="runs/$(date -u +%Y%m%d-%H%M%S)-${RUN_SCRIPT%.sh}-run${GITHUB_RUN_ID}-device${DEVICE}"
           URL="https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
           find "$OUT_DIR" -name "*.ocr-*.json" -delete
+          rm -f "$OUT_DIR/guest_state.tgz"  # logins are never stored in results
           echo "Saving results to branch results, folder $RUN_DIR"
           for attempt in 1 2 3 4 5; do
             rm -rf results-repo
@@ -330,5 +341,7 @@ jobs:
         if: always()
         run: |
           if [ "${RETIRED:-0}" = 1 ]; then S="retired, skipped"
-          else S="$(cat "$RUNNER_TEMP/final_status" 2>/dev/null || echo failed)"; fi
+          elif [ -f "$RUNNER_TEMP/final_status" ]; then S="$(cat "$RUNNER_TEMP/final_status")"
+          else S="$(sed -n 's/.*"status": "\([^"]*\)".*/\1/p' "$RUNNER_TEMP/out/result.json" 2>/dev/null)"; S="${S:-failed}"; fi
+          [ "${{ inputs.fresh_start }}" = true ] && S="$S (fresh start)"
           echo "Device $DEVICE: $S" | tee -a "$GITHUB_STEP_SUMMARY"
