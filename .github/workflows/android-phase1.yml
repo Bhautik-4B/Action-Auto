@@ -118,6 +118,7 @@ jobs:
           # because this log is public.
           script: |
             bash -c 'echo "Installing Dual Space: $(basename "$DUALSPACE_APK")" >>"$RUNNER_TEMP/workflow_log.txt"; adb install -r -g "$DUALSPACE_APK" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | grep -q Success && echo "[$(date -u +%H:%M:%S)] Dual Space installed" || { echo "::error::Dual Space install failed"; exit 1; }'
+            bash -o pipefail -c 'bash private/scripts/dualspace_clone.sh "$APK_PATH" "$OUT_DIR/dualspace" 5 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] (Clone|Dual Space RESULT)"; true; }'
             bash -o pipefail -c 'bash "private/scripts/$RUN_SCRIPT" "$APK_PATH" "$OUT_DIR" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] " | grep --line-buffered -vE " step_[0-9]+ " | sed -u -E "s/(Guest ID: |guest|expected guest |but got )[0-9]+/\1***/g"; true; }'
 
       # If this device failed before its script could say so (e.g. the emulator
