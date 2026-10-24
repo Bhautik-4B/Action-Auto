@@ -22,6 +22,10 @@ on:
         type: choice
         options: [same, mixed, small, extreme]
         default: same
+      backend:
+        description: "Also test the backend: run it on this machine (private/backend), build the APK with BACKEND_URL=http://localhost:8080, sign the app in, then check the backend's database"
+        type: boolean
+        default: false
   push:
     paths:
       - .github/workflows/test-phone-apk.yml
@@ -79,6 +83,29 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.14.3"
+
+      # backend=true only: the backend runs here for the whole job (127.0.0.1:8080,
+      # its database under the runner's temp folder); the phone reaches it
+      # through adb reverse (test_phone_app.sh, BACKEND_TEST=1).
+      - uses: actions/setup-node@v4
+        if: inputs.backend
+        with:
+          node-version: "22"
+
+      - name: Start backend
+        if: inputs.backend
+        working-directory: private/backend
+        run: |
+          exec >>"$RUNNER_TEMP/workflow_log.txt" 2>&1
+          npm ci --no-audit --no-fund
+          B="$RUNNER_TEMP/backend"; mkdir -p "$B"
+          JWT_SECRET="$(openssl rand -hex 32)" HOST=127.0.0.1 PORT=8080 DB_PATH="$B/app.db" NODE_ENV=production \
+            setsid nohup node src/server.js > "$B/server.log" 2>&1 < /dev/null &
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8080/healthz && break; sleep 1; done
+          curl -sf http://127.0.0.1:8080/healthz || { echo "::error::Backend did not start"; tail -50 "$B/server.log"; exit 1; }
+          echo "BACKEND_URL=http://localhost:8080" >> "$GITHUB_ENV"
+          echo "BACKEND_TEST=1" >> "$GITHUB_ENV"
+          echo "BACKEND_DB=$B/app.db" >> "$GITHUB_ENV"
 
       - name: Build phone APK
         working-directory: private/android-app
@@ -146,6 +173,12 @@ jobs:
           script: |
             bash -o pipefail -c 'bash private/scripts/test_phone_app.sh "$GAME_APK" "$APP_APK" "$OUT_DIR" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8} [AP]M\] " | grep --line-buffered -vE "TAP |step_[0-9]+" | sed -u -E "s/(Guest ID: |guest|expected guest |but got |guest_id.: .)[0-9]+/\1***/g"; true; }'
 
+      - name: Backend server log
+        if: always() && inputs.backend
+        run: |
+          mkdir -p "${OUT_DIR:-$RUNNER_TEMP/out}/backend"
+          cp "$RUNNER_TEMP/backend/server.log" "${OUT_DIR:-$RUNNER_TEMP/out}/backend/server.log" 2>/dev/null || true
+
       - name: Save results to private repo (branch "results")
         if: always()
         env:
@@ -177,3 +210,12 @@ jobs:
         run: |
           S="$(sed -n 's/.*"status": "\([^"]*\)".*/\1/p' "$RUNNER_TEMP/out/result.json" 2>/dev/null)"; S="${S:-failed}"
           echo "Device $DEVICE: $S" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # backend=true only: the job fails when check_backend.mjs's asserts fail.
+      - name: Backend check
+        if: always() && inputs.backend
+        run: |
+          D="$RUNNER_TEMP/out/backend"
+          E="$(cat "$D/check_exit" 2>/dev/null)"
+          { echo "Device $DEVICE backend check:"; echo '```'; grep -E "^(PASS|FAIL|BACKEND CHECK|runs:|rounds:|wallet|devices:|users:|sync_ops:|settings rows:|clone_states:|winners:)" "$D/check_stdout.txt" 2>/dev/null || echo "no check output"; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$E" = 0 ] || { echo "::error::Backend check failed (exit ${E:-none})"; exit 1; }
