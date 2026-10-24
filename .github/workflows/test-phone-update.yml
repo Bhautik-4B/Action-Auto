@@ -130,7 +130,7 @@ jobs:
           OUT_DIR="${OUT_DIR:-$RUNNER_TEMP/out}"; mkdir -p "$OUT_DIR"
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          RUN_DIR="runs/$(date -u +%Y%m%d-%H%M%S)-phoneupdate-run${GITHUB_RUN_ID}-api${{ matrix.api }}"
+          RUN_DIR="runs/$(TZ=Asia/Kolkata date +%Y%m%d-%H%M%S)-phoneupdate-run${GITHUB_RUN_ID}-api${{ matrix.api }}"
           URL="https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
           echo "Saving results to branch results, folder $RUN_DIR"
           for attempt in 1 2 3 4 5; do

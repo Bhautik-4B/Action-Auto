@@ -86,7 +86,7 @@ jobs:
           cp "$RUNNER_TEMP/build_log.txt" "$RUNNER_TEMP/out/" 2>/dev/null || true
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          RUN_DIR="runs/$(date -u +%Y%m%d-%H%M%S)-uitour-run${GITHUB_RUN_ID}"
+          RUN_DIR="runs/$(TZ=Asia/Kolkata date +%Y%m%d-%H%M%S)-uitour-run${GITHUB_RUN_ID}"
           URL="https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
           for attempt in 1 2 3 4 5; do
             rm -rf results-repo
