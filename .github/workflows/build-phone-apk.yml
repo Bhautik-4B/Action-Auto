@@ -73,5 +73,11 @@ jobs:
           # branch commit whose workflow files differ from it (HTTP 403).
           gh release create "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" $PRE \
             --title "4B-Rummy-Home 1.${{ github.run_number }}.${{ github.run_attempt }}" \
-            --notes "Android app for real ARM phones. Android 8 or newer. Install the APK, open 4B-Rummy-Home, follow the three steps of Setup, then press Start. Two phones pair over the same Wi-Fi with an 8-letter code. Built from branch $GITHUB_REF_NAME."
+            --notes "Android app for real ARM phones. Android 8 or newer. Install the APK, open 4B-Rummy-Home, follow the steps of Setup, then press Start. It updates itself when a new version comes out. Built from branch $GITHUB_REF_NAME."
           echo "Released $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
+          # Only the newest app release is kept: older ones (and their tags) are
+          # deleted. The app updates itself from the newest one.
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' \
+            | grep '^phone-v' | grep -vx "$TAG" | while read -r OLD; do
+                gh release delete "$OLD" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag && echo "Deleted old release $OLD"
+              done || true
