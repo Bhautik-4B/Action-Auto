@@ -1,0 +1,85 @@
+name: Explore cloner (delete a clone)
+
+# Finds how a clone is deleted in Dual Space Pro (scripts/explore_cloner_delete.sh),
+# for the phone app's clean-up of lost guests. Nothing is played or released.
+# Screens go to branch "results" of the private repo, folder runs/<time>-explorecloner-run<id>.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/explore-cloner.yml
+
+permissions:
+  contents: read
+
+env:
+  PRIVATE_REPO: Bhautik-4B/Game-Auto
+
+jobs:
+  explore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Checkout private repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          path: private
+
+      - name: Get game and Dual Space Pro
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/apk"
+          gh release download --repo "$PRIVATE_REPO" --pattern '*.apk' --dir "$RUNNER_TEMP/apk" >/dev/null 2>&1 \
+            || cp private/apk/*.apk "$RUNNER_TEMP/apk/" 2>/dev/null || { echo "::error::No APK found"; exit 1; }
+          APK="$(ls "$RUNNER_TEMP"/apk/*.apk | grep -vE '/(com\.ludashi\.dualspace|net\.typeblog\.shelter|co\.keeptop\.multi\.space|com\.dualspacepro\.multispace)_' | head -1)"
+          echo "GAME_APK=$APK" >> "$GITHUB_ENV"
+          curl -fsSL -o "$RUNNER_TEMP/dual.apk" "https://github.com/$GITHUB_REPOSITORY/releases/download/Dual/base.apk"
+          echo "CLONER_APK=$RUNNER_TEMP/dual.apk" >> "$GITHUB_ENV"
+
+      - name: Explore on the emulator
+        timeout-minutes: 20
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_4
+          cores: 4
+          ram-size: 6144M
+          disk-size: 8G
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save
+          disable-animations: true
+          script: bash private/scripts/explore_cloner_delete.sh "$GAME_APK" "$CLONER_APK" "$RUNNER_TEMP/out" > "$RUNNER_TEMP/explore_log.txt" 2>&1 || true
+
+      - name: Save screens to private repo (branch "results")
+        if: always()
+        env:
+          TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"; cp "$RUNNER_TEMP/explore_log.txt" "$RUNNER_TEMP/out/" 2>/dev/null || true
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          RUN_DIR="runs/$(TZ=Asia/Kolkata date +%Y%m%d-%H%M%S)-explorecloner-run${GITHUB_RUN_ID}"
+          URL="https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
+          for attempt in 1 2 3 4 5; do
+            rm -rf results-repo
+            git clone -q --depth 1 --filter=blob:none --no-checkout --branch results "$URL" results-repo
+            git -C results-repo sparse-checkout set --no-cone "/$RUN_DIR/" && git -C results-repo checkout -q results
+            mkdir -p "results-repo/$RUN_DIR" && cp -r "$RUNNER_TEMP/out"/. "results-repo/$RUN_DIR"/
+            git -C results-repo add -A && git -C results-repo commit -q -m "Explore cloner: $RUN_DIR"
+            git -C results-repo push -q origin results && break
+            sleep $((attempt * 5))
+          done
+          echo "Saved to $RUN_DIR" | tee -a "$GITHUB_STEP_SUMMARY"
