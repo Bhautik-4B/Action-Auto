@@ -1,7 +1,7 @@
 name: Fetch cloner APKs
 
 # Downloads the two cloner apps (Multi Space and Dual Space Pro, both on Google
-# Play) from the APKPure mirror, checks each file (package name, signer) and
+# Play) from APKPure (with apkeep), checks each file (package name, signer) and
 # uploads it to release "APK" of the PRIVATE repo Bhautik-4B/Game-Auto, where
 # the Phase 1 workflow and the phone app take it from. Runs when this file
 # changes, or by hand. Files already in the release are left as they are.
@@ -31,17 +31,26 @@ jobs:
           BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
           HAVE="$(gh release view APK --repo "$PRIVATE_REPO" --json assets --jq '.assets[].name')"
           mkdir -p dl
+          curl -fsSL -o apkeep https://github.com/EFForg/apkeep/releases/latest/download/apkeep-x86_64-unknown-linux-gnu && chmod +x apkeep
           for PKG in co.keeptop.multi.space com.dualspacepro.multispace; do
             if grep -q "^${PKG}_" <<<"$HAVE"; then echo "$PKG: already in release APK"; continue; fi
-            F="dl/$PKG.apk"
-            if ! curl -fsSL --retry 3 -A "Mozilla/5.0" -o "$F" "https://d.apkpure.com/b/APK/$PKG?version=latest"; then
-              echo "::warning::$PKG: download failed"; continue
+            # apkeep (EFF, open source) uses APKPure's app API; the web download
+            # answers 403 to GitHub's runners.
+            ./apkeep -a "$PKG" -d apk-pure dl/ >/dev/null 2>&1 || true
+            F="$(ls dl/"$PKG"*.apk 2>/dev/null | head -1)"
+            X="$(ls dl/"$PKG"*.xapk 2>/dev/null | head -1)"
+            if [ -z "$F" ] && [ -n "$X" ]; then
+              # A split bundle: use its base APK when it holds the whole app (no native splits needed).
+              mkdir -p "dl/$PKG.x" && unzip -q -o "$X" -d "dl/$PKG.x"
+              echo "$PKG: XAPK with $(ls "dl/$PKG.x"/*.apk | wc -l) APK(s): $(ls "dl/$PKG.x"/*.apk | xargs -n1 basename | tr '\n' ' ')"
+              F="$(ls "dl/$PKG.x/$PKG.apk" "dl/$PKG.x/base.apk" 2>/dev/null | head -1)"
             fi
+            if [ -z "$F" ]; then echo "::warning::$PKG: download failed"; continue; fi
             # Must be a real APK of that package (not an XAPK bundle or a web page).
             GOT="$("$BT/aapt" dump badging "$F" 2>/dev/null | sed -n "s/^package: name='\([^']*\)'.*versionName='\([^']*\)'.*/\1 \2/p")"
             if [ "${GOT%% *}" != "$PKG" ]; then echo "::warning::$PKG: downloaded file is not that APK ($(file -b "$F" | cut -c1-60))"; continue; fi
             VER="${GOT#* }"
             "$BT/apksigner" verify --print-certs "$F" | grep -E "Signer #1 certificate (DN|SHA-256)" || { echo "::warning::$PKG: signature does not verify"; continue; }
-            mv "$F" "dl/${PKG}_${VER}.apk"
+            [ "$F" = "dl/${PKG}_${VER}.apk" ] || mv "$F" "dl/${PKG}_${VER}.apk"
             gh release upload APK "dl/${PKG}_${VER}.apk" --repo "$PRIVATE_REPO" && echo "$PKG $VER: uploaded to release APK"
           done
