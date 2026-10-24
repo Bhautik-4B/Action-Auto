@@ -2,7 +2,7 @@ name: Test phone update
 
 # Tests the phone app's self-update on the emulator: builds an "old" build of
 # the app (version code 2) from the PRIVATE repo Bhautik-4B/Game-Auto (folder
-# android-app) and, on Android 11, 13 and 14:
+# android-app) and, on Android 11 and 14:
 #   1. update by itself: installs and opens it, and checks that it updates
 #      itself to the newest release of this repo (tag phone-v1.*) and opens
 #      again as that version (scripts/test_phone_update.sh);
@@ -38,9 +38,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Android 8-10 emulators here cannot run the ARM APK of a release.
+          # Only these emulator images here run the ARM APK of a release
+          # (Android 9, 10 and 13 fail with INSTALL_FAILED_NO_MATCHING_ABIS).
           - { api: 30, android: 11 }
-          - { api: 33, android: 13 }
           - { api: 34, android: 14 }
     steps:
       - name: Free disk space
