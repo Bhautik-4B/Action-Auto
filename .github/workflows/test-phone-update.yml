@@ -2,10 +2,15 @@ name: Test phone update
 
 # Tests the phone app's self-update on the emulator: builds an "old" build of
 # the app (version code 2) from the PRIVATE repo Bhautik-4B/Game-Auto (folder
-# android-app), installs and opens it, and checks that it updates itself to the
-# newest release of this repo (tag phone-v1.*) and opens again as that version.
-# Android's "Update?" question is tapped by the test, as a person would. Runs
-# on Android 11 and Android 14. Output goes to workflow_log.txt, saved with the
+# android-app) and, on Android 9, 11 and 14:
+#   1. update by itself: installs and opens it, and checks that it updates
+#      itself to the newest release of this repo (tag phone-v1.*) and opens
+#      again as that version (scripts/test_phone_update.sh);
+#   2. the popup: installs the old build again and checks the "Please update"
+#      popup: it comes up, stays after Cancel / Back / a tap outside, nothing
+#      starts, and its Update button updates the app
+#      (scripts/test_phone_update_popup.sh).
+# Android's own install question is answered by the test, as a person would. Output goes to workflow_log.txt, saved with the
 # run's results (branch "results" of the private repo).
 
 on:
@@ -28,11 +33,12 @@ jobs:
   test:
     name: Android ${{ matrix.android }} (API ${{ matrix.api }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
+          - { api: 28, android: 9 }
           - { api: 30, android: 11 }
           - { api: 34, android: 14 }
     steps:
@@ -94,7 +100,7 @@ jobs:
           echo "The app must update itself to $TAG" | tee -a "$RUNNER_TEMP/workflow_log.txt"
 
       - name: Test the update on the emulator
-        timeout-minutes: 30
+        timeout-minutes: 45
         uses: reactivecircus/android-emulator-runner@v2
         env:
           WAIT_SEC: "900"
@@ -110,7 +116,9 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save
           disable-animations: true
           script: |
-            bash -o pipefail -c 'bash private/scripts/test_phone_update.sh "$APP_APK" "$OUT_DIR" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] |^Update: |^Updated to " ; true; }'
+            bash -o pipefail -c 'bash private/scripts/test_phone_update.sh "$APP_APK" "$OUT_DIR/auto" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] |^Update: |^Updated to " ; true; }'
+            adb uninstall app.gameauto.phone >/dev/null 2>&1 || true
+            bash -o pipefail -c 'bash private/scripts/test_phone_update_popup.sh "$APP_APK" "$OUT_DIR/popup" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] |^  app: " ; true; }'
 
       - name: Save results to private repo (branch "results")
         if: always()
@@ -141,7 +149,9 @@ jobs:
       - name: Status
         if: always()
         run: |
-          S="$(sed -n 's/.*"status": "\([^"]*\)".*/\1/p' "$RUNNER_TEMP/out/result.json" 2>/dev/null)"; S="${S:-failed}"
-          D="$(sed -n 's/.*"detail": "\([^"]*\)".*/\1/p' "$RUNNER_TEMP/out/result.json" 2>/dev/null)"
-          echo "Android ${{ matrix.android }}: $S${D:+ ($D)}" | tee -a "$GITHUB_STEP_SUMMARY"
-          [ "$S" = updated ]
+          get() { sed -n "s/.*\"$2\": \"\([^\"]*\)\".*/\1/p" "$RUNNER_TEMP/out/$1/result.json" 2>/dev/null | head -1; }
+          A="$(get auto status)"; A="${A:-failed}"; P="$(get popup status)"; P="${P:-failed}"
+          echo "Android ${{ matrix.android }} update by itself: $A ($(get auto detail))" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Android ${{ matrix.android }} popup: $P ($(get popup detail))" | tee -a "$GITHUB_STEP_SUMMARY"
+          sed -n 's/.*"checks": {\(.*\)}}/\1/p' "$RUNNER_TEMP/out/popup/result.json" 2>/dev/null | tr ',' '\n' | sed 's/^ */  - /' | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$A" = updated ] && { [ "$P" = popup_ok ] || [ "$P" = updated_automatically ]; }
