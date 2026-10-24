@@ -50,10 +50,10 @@ jobs:
       # Full output goes to a file; only compile errors are shown here.
       - name: Build
         working-directory: private/android-app
-        env:
-          VERSION_CODE: ${{ github.run_number }}
-          VERSION_NAME: "1.${{ github.run_number }}"
         run: |
+          # A re-run of the same run gets a higher number too, so it installs over the last one.
+          export VERSION_CODE=$((GITHUB_RUN_NUMBER * 10 + GITHUB_RUN_ATTEMPT))
+          export VERSION_NAME="1.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
           if ! gradle --no-daemon --console=plain assembleRelease >"$RUNNER_TEMP/build_log.txt" 2>&1; then
             grep -E "^e: |error:|What went wrong|FAILURE" -A4 "$RUNNER_TEMP/build_log.txt" | head -80
             exit 1
@@ -64,7 +64,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="phone-v1.${{ github.run_number }}"
+          TAG="phone-v1.${{ github.run_number }}.${{ github.run_attempt }}"
           APK="$RUNNER_TEMP/4B-Rummy-Home-$TAG.apk"
           cp private/android-app/app/build/outputs/apk/release/app-release.apk "$APK"
           # A build from a test branch is marked as a pre-release.
@@ -72,6 +72,6 @@ jobs:
           # The tag goes on the default branch: GitHub refuses this token a tag on a
           # branch commit whose workflow files differ from it (HTTP 403).
           gh release create "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" $PRE \
-            --title "4B-Rummy-Home 1.${{ github.run_number }}" \
+            --title "4B-Rummy-Home 1.${{ github.run_number }}.${{ github.run_attempt }}" \
             --notes "Android app for real ARM phones (Android 11 or newer). Install the APK and open 4B-Rummy-Home. Its Setup page installs the game and Shelter and shows what is still missing; then press Start. Built from branch $GITHUB_REF_NAME."
           echo "Released $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
