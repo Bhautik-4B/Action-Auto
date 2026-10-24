@@ -69,7 +69,9 @@ jobs:
           cp private/android-app/app/build/outputs/apk/release/app-release.apk "$APK"
           # A build from a test branch is marked as a pre-release.
           PRE=""; [ "$GITHUB_REF_NAME" = main ] || PRE="--prerelease"
-          gh release create "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" $PRE \
+          # The tag goes on the default branch: GitHub refuses this token a tag on a
+          # branch commit whose workflow files differ from it (HTTP 403).
+          gh release create "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" $PRE \
             --title "4B-Rummy-Home 1.${{ github.run_number }}" \
             --notes "Android app for real ARM phones (Android 11 or newer). Install the APK and open 4B-Rummy-Home. Its Setup page installs the game and Shelter and shows what is still missing; then press Start. Built from branch $GITHUB_REF_NAME."
           echo "Released $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
