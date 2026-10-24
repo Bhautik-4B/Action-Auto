@@ -73,5 +73,5 @@ jobs:
           # branch commit whose workflow files differ from it (HTTP 403).
           gh release create "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" $PRE \
             --title "4B-Rummy-Home 1.${{ github.run_number }}.${{ github.run_attempt }}" \
-            --notes "Android app for real ARM phones (Android 11 or newer). Install the APK and open 4B-Rummy-Home. Its Setup page installs the game and Shelter and shows what is still missing; then press Start. Built from branch $GITHUB_REF_NAME."
+            --notes "Android app for real ARM phones. Android 8 or newer. Install the APK, open 4B-Rummy-Home, follow the three steps of Setup, then press Start. Two phones pair over the same Wi-Fi with an 8-letter code. Built from branch $GITHUB_REF_NAME."
           echo "Released $TAG" | tee -a "$GITHUB_STEP_SUMMARY"

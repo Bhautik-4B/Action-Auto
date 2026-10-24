@@ -3,8 +3,8 @@ name: Test phone APK
 # Tests the phone app on the same emulator as "Android Phase 1": builds the APK
 # from the PRIVATE repo Bhautik-4B/Game-Auto (folder android-app), installs it
 # with the game and a cloner app (from release APK), and lets it play as the
-# workflow does: 2 clones one after another, two devices at the same table,
-# device 1 betting on dragon and device 2 on tiger in the same round.
+# workflow does: 2 clones one after another. Each emulator plays alone (their
+# Wi-Fi pairing needs two phones on one network).
 # As in Phase 1, nothing private is printed here: the output goes to
 # workflow_log.txt, saved with the run's results (branch "results" of the
 # private repo, folder runs/<time>-phoneapp-run<id>-device<N>).
@@ -110,7 +110,9 @@ jobs:
         timeout-minutes: 50
         uses: reactivecircus/android-emulator-runner@v2
         env:
-          SYNC_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          # Each emulator plays alone: two GitHub machines share no Wi-Fi, so the
+          # phones' Wi-Fi pairing is tested on real phones only.
+          APP_DEVICE: "0"
           WAIT_SEC: "2100"
           CLONES: "2"
         with:
