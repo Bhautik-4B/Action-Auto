@@ -1,0 +1,166 @@
+name: Test phone APK
+
+# Tests the phone app on the same emulator as "Android Phase 1": builds the APK
+# from the PRIVATE repo Bhautik-4B/Game-Auto (folder android-app), installs it
+# with the game and a cloner app (from release APK), and lets it play as the
+# workflow does: 2 clones one after another. Each emulator plays alone (their
+# Wi-Fi pairing needs two phones on one network).
+# As in Phase 1, nothing private is printed here: the output goes to
+# workflow_log.txt, saved with the run's results (branch "results" of the
+# private repo, folder runs/<time>-phoneapp-run<id>-device<N>).
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "What the app does"
+        type: choice
+        options: [bet, table, login]
+        default: bet
+  push:
+    paths:
+      - .github/workflows/test-phone-apk.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-phone-apk
+  cancel-in-progress: false
+
+env:
+  PRIVATE_REPO: Bhautik-4B/Game-Auto
+
+jobs:
+  test:
+    name: device ${{ matrix.device }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [1, 2]
+    env:
+      DEVICE: ${{ matrix.device }}
+      APP_MODE: ${{ (inputs.mode == 'login' && '0') || (inputs.mode == 'table' && '1') || '2' }}
+    steps:
+      - name: Free disk space
+        run: |
+          exec >>"$RUNNER_TEMP/workflow_log.txt" 2>&1
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h / | tail -1
+
+      - name: Enable KVM
+        run: |
+          exec >>"$RUNNER_TEMP/workflow_log.txt" 2>&1
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Checkout private repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          path: private
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+
+      - name: Build phone APK
+        working-directory: private/android-app
+        env:
+          # x86_64 too, so the emulator runs ML Kit natively (see app/build.gradle.kts).
+          APP_ABIS: x86_64,arm64-v8a
+        run: |
+          if ! gradle --no-daemon --console=plain assembleRelease >>"$RUNNER_TEMP/workflow_log.txt" 2>&1; then
+            grep -E "^e: |error:|What went wrong" -A4 "$RUNNER_TEMP/workflow_log.txt" | head -60
+            exit 1
+          fi
+          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/phone-app.apk"
+          echo "APP_APK=$RUNNER_TEMP/phone-app.apk" >> "$GITHUB_ENV"
+
+      - name: Get game APK
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          exec >>"$RUNNER_TEMP/workflow_log.txt" 2>&1
+          mkdir -p "$RUNNER_TEMP/apk"
+          gh release download --repo "$PRIVATE_REPO" --pattern '*.apk' --dir "$RUNNER_TEMP/apk" 2>/dev/null \
+            || cp private/apk/*.apk "$RUNNER_TEMP/apk/" 2>/dev/null || { echo "::error::No APK found"; exit 1; }
+          APK="$(ls "$RUNNER_TEMP"/apk/*.apk | grep -vE '/(com\.ludashi\.dualspace|net\.typeblog\.shelter|co\.keeptop\.multi\.space|com\.dualspacepro\.multispace)_' | head -1)"
+          echo "GAME_APK=$APK" >> "$GITHUB_ENV"
+          echo "OUT_DIR=$RUNNER_TEMP/out" >> "$GITHUB_ENV"
+          # The cloner app from release APK, as in Phase 1 (Multi Space, else Dual
+          # Space Pro, else Dual Space); the app plays 2 clones of the game in it.
+          gh release download APK --repo "$PRIVATE_REPO" --pattern '*.apk' --dir "$RUNNER_TEMP/apk" --skip-existing 2>/dev/null || true
+          # Dual Space Pro, from this repo's release "Dual" (uploaded by the owner).
+          curl -fsSL -o "$RUNNER_TEMP/apk/com.dualspacepro.multispace_dual.apk" \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/Dual/base.apk" || rm -f "$RUNNER_TEMP/apk/com.dualspacepro.multispace_dual.apk"
+          for C in co.keeptop.multi.space com.dualspacepro.multispace com.ludashi.dualspace; do
+            F="$(ls "$RUNNER_TEMP"/apk/${C}_*.apk 2>/dev/null | head -1)"
+            [ -n "$F" ] && { echo "CLONER_APK=$F" >> "$GITHUB_ENV"; echo "CLONER_PKG=$C" >> "$GITHUB_ENV"; echo "Cloner: $(basename "$F")"; break; }
+          done
+
+      - name: Test the app on the emulator
+        timeout-minutes: 50
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          # Each emulator plays alone: two GitHub machines share no Wi-Fi, so the
+          # phones' Wi-Fi pairing is tested on real phones only.
+          APP_DEVICE: "0"
+          WAIT_SEC: "2100"
+          CLONES: "2"
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_4
+          cores: 4
+          ram-size: 6144M
+          disk-size: 8G
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save
+          disable-animations: true
+          # The app's step lines are shown here with guest IDs hidden (public log).
+          script: |
+            bash -o pipefail -c 'bash private/scripts/test_phone_app.sh "$GAME_APK" "$APP_APK" "$OUT_DIR" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] " | grep --line-buffered -vE "TAP |step_[0-9]+" | sed -u -E "s/(Guest ID: |guest|expected guest |but got |guest_id.: .)[0-9]+/\1***/g"; true; }'
+
+      - name: Save results to private repo (branch "results")
+        if: always()
+        env:
+          TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          exec >>"$RUNNER_TEMP/workflow_log.txt" 2>&1
+          OUT_DIR="${OUT_DIR:-$RUNNER_TEMP/out}"; mkdir -p "$OUT_DIR"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          RUN_DIR="runs/$(date -u +%Y%m%d-%H%M%S)-phoneapp-run${GITHUB_RUN_ID}-device${DEVICE}"
+          URL="https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
+          echo "Saving results to branch results, folder $RUN_DIR"
+          for attempt in 1 2 3 4 5; do
+            rm -rf results-repo
+            if git clone -q --depth 1 --filter=blob:none --no-checkout --branch results "$URL" results-repo 2>/dev/null; then
+              git -C results-repo sparse-checkout set --no-cone "/$RUN_DIR/" && git -C results-repo checkout -q results
+            else
+              mkdir results-repo && git -C results-repo init -q -b results && git -C results-repo remote add origin "$URL"
+            fi
+            mkdir -p "results-repo/$RUN_DIR" && cp -r "$OUT_DIR"/. "results-repo/$RUN_DIR"/
+            cp "$RUNNER_TEMP/workflow_log.txt" "results-repo/$RUN_DIR/"
+            git -C results-repo add -A && git -C results-repo commit -q -m "Phone app test results: $RUN_DIR"
+            git -C results-repo push -q origin results && break
+            echo "results branch changed under us (other device?), retry $attempt"; sleep $((attempt * 5))
+          done
+
+      - name: Status
+        if: always()
+        run: |
+          S="$(sed -n 's/.*"status": "\([^"]*\)".*/\1/p' "$RUNNER_TEMP/out/result.json" 2>/dev/null)"; S="${S:-failed}"
+          echo "Device $DEVICE: $S" | tee -a "$GITHUB_STEP_SUMMARY"
