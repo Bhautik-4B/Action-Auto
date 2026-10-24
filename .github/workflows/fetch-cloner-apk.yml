@@ -32,14 +32,17 @@ jobs:
           HAVE="$(gh release view APK --repo "$PRIVATE_REPO" --json assets --jq '.assets[].name')"
           mkdir -p dl
           curl -fsSL -o apkeep https://github.com/EFForg/apkeep/releases/latest/download/apkeep-x86_64-unknown-linux-gnu && chmod +x apkeep
+          # apkeep asks to acknowledge that APKPure's files are not checked by
+          # Google (USAGE-apkpure.md); the signer is printed below for review.
+          DOC="$(curl -fsSL https://raw.githubusercontent.com/EFForg/apkeep/master/USAGE-apkpure.md || true)"
+          echo "$DOC" | grep -iE -- "-o |option|acknowledg|accept" | head -8
+          APKEEP_OPTS="$(echo "$DOC" | grep -oE -- "-o [a-z_]+=(true|1|yes)" | head -1)"
+          echo "apkeep options: ${APKEEP_OPTS:-none found}"
           for PKG in co.keeptop.multi.space com.dualspacepro.multispace; do
             if grep -q "^${PKG}_" <<<"$HAVE"; then echo "$PKG: already in release APK"; continue; fi
             # apkeep (EFF, open source) uses APKPure's app API; the web download
             # answers 403 to GitHub's runners.
-            for SRC in apk-pure huawei-app-gallery; do
-              ./apkeep -a "$PKG" -d "$SRC" dl/ 2>&1 | tail -3 | sed "s/^/$PKG ($SRC): /"
-              ls dl/"$PKG"*.*apk >/dev/null 2>&1 && break
-            done
+            ./apkeep -a "$PKG" -d apk-pure $APKEEP_OPTS dl/ 2>&1 | tail -3 | sed "s/^/$PKG: /"
             F="$(ls dl/"$PKG"*.apk 2>/dev/null | head -1)"
             X="$(ls dl/"$PKG"*.xapk 2>/dev/null | head -1)"
             if [ -z "$F" ] && [ -n "$X" ]; then
