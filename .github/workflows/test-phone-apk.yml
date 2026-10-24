@@ -93,6 +93,14 @@ jobs:
             || cp private/apk/*.apk "$RUNNER_TEMP/apk/" 2>/dev/null || { echo "::error::No APK found"; exit 1; }
           APK="$(ls "$RUNNER_TEMP"/apk/*.apk | grep -vE '/(com\.ludashi\.dualspace|net\.typeblog\.shelter)_' | head -1)"
           echo "GAME_APK=$APK" >> "$GITHUB_ENV"
+          # Shelter, as in Phase 1: from release APK, else from F-Droid.
+          ls "$RUNNER_TEMP"/apk/net.typeblog.shelter_*.apk >/dev/null 2>&1 \
+            || gh release download APK --repo "$PRIVATE_REPO" --pattern 'net.typeblog.shelter_*.apk' --dir "$RUNNER_TEMP/apk" 2>/dev/null || true
+          if ! ls "$RUNNER_TEMP"/apk/net.typeblog.shelter_*.apk >/dev/null 2>&1; then
+            VC="$(curl -fsSL https://f-droid.org/api/v1/packages/net.typeblog.shelter | python3 -c 'import sys, json; print(json.load(sys.stdin)["suggestedVersionCode"])')"
+            curl -fsSL -o "$RUNNER_TEMP/apk/net.typeblog.shelter_$VC.apk" "https://f-droid.org/repo/net.typeblog.shelter_$VC.apk" || true
+          fi
+          echo "SHELTER_APK=$(ls "$RUNNER_TEMP"/apk/net.typeblog.shelter_*.apk 2>/dev/null | head -1)" >> "$GITHUB_ENV"
           echo "OUT_DIR=$RUNNER_TEMP/out" >> "$GITHUB_ENV"
 
       - name: Test the app on the emulator

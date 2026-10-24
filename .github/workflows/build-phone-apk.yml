@@ -65,11 +65,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="phone-v1.${{ github.run_number }}"
-          APK="$RUNNER_TEMP/GameAuto-$TAG.apk"
+          APK="$RUNNER_TEMP/4B-Rummy-Home-$TAG.apk"
           cp private/android-app/app/build/outputs/apk/release/app-release.apk "$APK"
           # A build from a test branch is marked as a pre-release.
           PRE=""; [ "$GITHUB_REF_NAME" = main ] || PRE="--prerelease"
           gh release create "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" $PRE \
-            --title "Phone app 1.${{ github.run_number }}" \
-            --notes "Android app for real ARM phones (Android 11 or newer). Install the APK, open Game Auto, turn on its accessibility service, choose the game and press Start. Built from branch $GITHUB_REF_NAME."
+            --title "4B-Rummy-Home 1.${{ github.run_number }}" \
+            --notes "Android app for real ARM phones (Android 11 or newer). Install the APK and open 4B-Rummy-Home. Its Setup page installs the game and Shelter and shows what is still missing; then press Start. Built from branch $GITHUB_REF_NAME."
           echo "Released $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
