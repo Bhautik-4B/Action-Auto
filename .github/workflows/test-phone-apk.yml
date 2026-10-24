@@ -30,7 +30,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: test-phone-apk
+  # One queue per phone shape: a "mixed" run and a normal one run side by side.
+  group: test-phone-apk-${{ inputs.screens || 'same' }}
   cancel-in-progress: false
 
 env:
