@@ -75,6 +75,9 @@ jobs:
 
       - name: Build phone APK
         working-directory: private/android-app
+        env:
+          # x86_64 too, so the emulator runs ML Kit natively (see app/build.gradle.kts).
+          APP_ABIS: x86_64,arm64-v8a
         run: |
           if ! gradle --no-daemon --console=plain assembleRelease >>"$RUNNER_TEMP/workflow_log.txt" 2>&1; then
             grep -E "^e: |error:|What went wrong" -A4 "$RUNNER_TEMP/workflow_log.txt" | head -60
