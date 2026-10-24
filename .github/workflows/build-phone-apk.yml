@@ -1,0 +1,75 @@
+name: Build phone APK
+
+# Builds the phone app (source: folder android-app of the PRIVATE repo
+# Bhautik-4B/Game-Auto, reached with the PRIVATE_REPO_TOKEN secret) and
+# publishes the APK as a release of this repo, for real ARM phones instead of
+# the emulator. Click "Run workflow"; it also runs when this file changes.
+# The APK is public here: anyone can download it.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/build-phone-apk.yml
+
+permissions:
+  contents: write   # create the release
+
+concurrency:
+  group: build-phone-apk
+  cancel-in-progress: false
+
+env:
+  PRIVATE_REPO: Bhautik-4B/Game-Auto
+
+jobs:
+  build:
+    name: build APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout private repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          # Same branch name as this run (main -> main, a test branch -> the
+          # private repo's branch of the same name).
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          path: private
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+
+      # Full output goes to a file; only compile errors are shown here.
+      - name: Build
+        working-directory: private/android-app
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: "1.${{ github.run_number }}"
+        run: |
+          if ! gradle --no-daemon --console=plain assembleRelease >"$RUNNER_TEMP/build_log.txt" 2>&1; then
+            grep -E "^e: |error:|What went wrong|FAILURE" -A4 "$RUNNER_TEMP/build_log.txt" | head -80
+            exit 1
+          fi
+          ls -l app/build/outputs/apk/release/
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="phone-v1.${{ github.run_number }}"
+          APK="$RUNNER_TEMP/GameAuto-$TAG.apk"
+          cp private/android-app/app/build/outputs/apk/release/app-release.apk "$APK"
+          # A build from a test branch is marked as a pre-release.
+          PRE=""; [ "$GITHUB_REF_NAME" = main ] || PRE="--prerelease"
+          gh release create "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" $PRE \
+            --title "Phone app 1.${{ github.run_number }}" \
+            --notes "Android app for real ARM phones (Android 11 or newer). Install the APK, open Game Auto, turn on its accessibility service, choose the game and press Start. Built from branch $GITHUB_REF_NAME."
+          echo "Released $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
