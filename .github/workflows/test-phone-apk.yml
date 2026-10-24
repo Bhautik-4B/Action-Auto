@@ -2,8 +2,9 @@ name: Test phone APK
 
 # Tests the phone app on the same emulator as "Android Phase 1": builds the APK
 # from the PRIVATE repo Bhautik-4B/Game-Auto (folder android-app), installs it
-# with the game, and lets it play as the workflow does: two devices at the same
-# table, device 1 betting on dragon and device 2 on tiger in the same round.
+# with the game and a cloner app (from release APK), and lets it play as the
+# workflow does: 2 clones one after another, two devices at the same table,
+# device 1 betting on dragon and device 2 on tiger in the same round.
 # As in Phase 1, nothing private is printed here: the output goes to
 # workflow_log.txt, saved with the run's results (branch "results" of the
 # private repo, folder runs/<time>-phoneapp-run<id>-device<N>).
@@ -34,7 +35,7 @@ jobs:
   test:
     name: device ${{ matrix.device }}
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -94,24 +95,23 @@ jobs:
           mkdir -p "$RUNNER_TEMP/apk"
           gh release download --repo "$PRIVATE_REPO" --pattern '*.apk' --dir "$RUNNER_TEMP/apk" 2>/dev/null \
             || cp private/apk/*.apk "$RUNNER_TEMP/apk/" 2>/dev/null || { echo "::error::No APK found"; exit 1; }
-          APK="$(ls "$RUNNER_TEMP"/apk/*.apk | grep -vE '/(com\.ludashi\.dualspace|net\.typeblog\.shelter)_' | head -1)"
+          APK="$(ls "$RUNNER_TEMP"/apk/*.apk | grep -vE '/(com\.ludashi\.dualspace|net\.typeblog\.shelter|co\.keeptop\.multi\.space|com\.dualspacepro\.multispace)_' | head -1)"
           echo "GAME_APK=$APK" >> "$GITHUB_ENV"
-          # Shelter, as in Phase 1: from release APK, else from F-Droid.
-          ls "$RUNNER_TEMP"/apk/net.typeblog.shelter_*.apk >/dev/null 2>&1 \
-            || gh release download APK --repo "$PRIVATE_REPO" --pattern 'net.typeblog.shelter_*.apk' --dir "$RUNNER_TEMP/apk" 2>/dev/null || true
-          if ! ls "$RUNNER_TEMP"/apk/net.typeblog.shelter_*.apk >/dev/null 2>&1; then
-            VC="$(curl -fsSL https://f-droid.org/api/v1/packages/net.typeblog.shelter | python3 -c 'import sys, json; print(json.load(sys.stdin)["suggestedVersionCode"])')"
-            curl -fsSL -o "$RUNNER_TEMP/apk/net.typeblog.shelter_$VC.apk" "https://f-droid.org/repo/net.typeblog.shelter_$VC.apk" || true
-          fi
-          echo "SHELTER_APK=$(ls "$RUNNER_TEMP"/apk/net.typeblog.shelter_*.apk 2>/dev/null | head -1)" >> "$GITHUB_ENV"
-          echo "OUT_DIR=$RUNNER_TEMP/out" >> "$GITHUB_ENV"
+          # The cloner app from release APK, as in Phase 1 (Multi Space, else Dual
+          # Space Pro, else Dual Space); the app plays 2 clones of the game in it.
+          gh release download APK --repo "$PRIVATE_REPO" --pattern '*.apk' --dir "$RUNNER_TEMP/apk" --skip-existing 2>/dev/null || true
+          for C in co.keeptop.multi.space com.dualspacepro.multispace com.ludashi.dualspace; do
+            F="$(ls "$RUNNER_TEMP"/apk/${C}_*.apk 2>/dev/null | head -1)"
+            [ -n "$F" ] && { echo "CLONER_APK=$F" >> "$GITHUB_ENV"; echo "CLONER_PKG=$C" >> "$GITHUB_ENV"; echo "Cloner: $(basename "$F")"; break; }
+          done
 
       - name: Test the app on the emulator
-        timeout-minutes: 40
+        timeout-minutes: 50
         uses: reactivecircus/android-emulator-runner@v2
         env:
           SYNC_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          WAIT_SEC: "1800"
+          WAIT_SEC: "2100"
+          CLONES: "2"
         with:
           api-level: 30
           target: google_apis
