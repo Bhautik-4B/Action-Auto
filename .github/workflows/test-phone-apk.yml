@@ -101,6 +101,9 @@ jobs:
           # The cloner app from release APK, as in Phase 1 (Multi Space, else Dual
           # Space Pro, else Dual Space); the app plays 2 clones of the game in it.
           gh release download APK --repo "$PRIVATE_REPO" --pattern '*.apk' --dir "$RUNNER_TEMP/apk" --skip-existing 2>/dev/null || true
+          # Dual Space Pro, from this repo's release "Dual" (uploaded by the owner).
+          curl -fsSL -o "$RUNNER_TEMP/apk/com.dualspacepro.multispace_dual.apk" \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/Dual/base.apk" || rm -f "$RUNNER_TEMP/apk/com.dualspacepro.multispace_dual.apk"
           for C in co.keeptop.multi.space com.dualspacepro.multispace com.ludashi.dualspace; do
             F="$(ls "$RUNNER_TEMP"/apk/${C}_*.apk 2>/dev/null | head -1)"
             [ -n "$F" ] && { echo "CLONER_APK=$F" >> "$GITHUB_ENV"; echo "CLONER_PKG=$C" >> "$GITHUB_ENV"; echo "Cloner: $(basename "$F")"; break; }
