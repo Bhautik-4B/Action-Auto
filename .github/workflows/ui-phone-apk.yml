@@ -84,6 +84,8 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/out"
           cp "$RUNNER_TEMP/build_log.txt" "$RUNNER_TEMP/out/" 2>/dev/null || true
+          # The test build too (private repo only), to check how it decompiles.
+          cp "$RUNNER_TEMP/phone-app.apk" "$RUNNER_TEMP/out/" 2>/dev/null || true
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           RUN_DIR="runs/$(TZ=Asia/Kolkata date +%Y%m%d-%H%M%S)-uitour-run${GITHUB_RUN_ID}"
