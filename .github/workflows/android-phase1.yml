@@ -126,8 +126,12 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_4
-          ram-size: 3072M
-          disk-size: 4G
+          # Room for the copies (each extra copy is a whole Android user): with 2
+          # cores and 3 GB the game loaded too slowly in copies 2-5 (run
+          # 40045710158). The runner has 4 cores and 16 GB.
+          cores: 4
+          ram-size: 6144M
+          disk-size: 8G
           force-avd-creation: false
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save
           disable-animations: true
@@ -187,6 +191,9 @@ jobs:
         run: |
           S="$(sed -n 's/.*"status": "\([^"]*\)".*/\1/p' "$RUNNER_TEMP/out/result.json" 2>/dev/null)"; S="${S:-failed}"
           echo "Device $DEVICE: $S" | tee -a "$GITHUB_STEP_SUMMARY"
+          # One line per copy (status and end balance only; no guest ids, this log is public).
+          python3 -c 'import json, sys; [print(f"- copy {k}: {v}") for k, v in json.load(open(sys.argv[1])).get("results", {}).items()]' \
+            "$RUNNER_TEMP/out/result.json" 2>/dev/null | tee -a "$GITHUB_STEP_SUMMARY" || true
 
   # Keep only the newest 3 runs of this workflow in the Actions tab (this run
   # counts as one); older finished runs and their public logs are deleted.
