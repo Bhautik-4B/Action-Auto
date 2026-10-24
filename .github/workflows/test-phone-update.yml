@@ -1,0 +1,147 @@
+name: Test phone update
+
+# Tests the phone app's self-update on the emulator: builds an "old" build of
+# the app (version code 2) from the PRIVATE repo Bhautik-4B/Game-Auto (folder
+# android-app), installs and opens it, and checks that it updates itself to the
+# newest release of this repo (tag phone-v1.*) and opens again as that version.
+# Android's "Update?" question is tapped by the test, as a person would. Runs
+# on Android 11 and Android 14. Output goes to workflow_log.txt, saved with the
+# run's results (branch "results" of the private repo).
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/test-phone-update.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-phone-update
+  cancel-in-progress: false
+
+env:
+  PRIVATE_REPO: Bhautik-4B/Game-Auto
+
+jobs:
+  test:
+    name: Android ${{ matrix.android }} (API ${{ matrix.api }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { api: 30, android: 11 }
+          - { api: 34, android: 14 }
+    steps:
+      - name: Free disk space
+        run: |
+          exec >>"$RUNNER_TEMP/workflow_log.txt" 2>&1
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h / | tail -1
+
+      - name: Enable KVM
+        run: |
+          exec >>"$RUNNER_TEMP/workflow_log.txt" 2>&1
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Checkout private repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          path: private
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+
+      - name: Build an old version of the app
+        working-directory: private/android-app
+        env:
+          APP_ABIS: x86_64
+          # Version code 2: updates are on (1 is the test build without them),
+          # and every release (<run> * 10 + <attempt>) is newer.
+          VERSION_CODE: "2"
+          VERSION_NAME: "0.2"
+        run: |
+          if ! gradle --no-daemon --console=plain assembleRelease >>"$RUNNER_TEMP/workflow_log.txt" 2>&1; then
+            grep -E "^e: |error:|What went wrong" -A4 "$RUNNER_TEMP/workflow_log.txt" | head -60
+            exit 1
+          fi
+          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/phone-app-old.apk"
+          echo "APP_APK=$RUNNER_TEMP/phone-app-old.apk" >> "$GITHUB_ENV"
+          echo "OUT_DIR=$RUNNER_TEMP/out" >> "$GITHUB_ENV"
+
+      - name: Newest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName' | grep '^phone-v1\.' \
+            | sed 's/^phone-v//' | sort -t. -k2,2n -k3,3n | tail -1)"
+          [ -n "$TAG" ] || { echo "::error::No phone-v1.* release to update to"; exit 1; }
+          echo "LATEST_VERSION=$TAG" >> "$GITHUB_ENV"
+          echo "The app must update itself to $TAG" | tee -a "$RUNNER_TEMP/workflow_log.txt"
+
+      - name: Test the update on the emulator
+        timeout-minutes: 30
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          WAIT_SEC: "900"
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          profile: pixel_4
+          cores: 4
+          ram-size: 4096M
+          disk-size: 6G
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save
+          disable-animations: true
+          script: |
+            bash -o pipefail -c 'bash private/scripts/test_phone_update.sh "$APP_APK" "$OUT_DIR" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] |^Update: |^Updated to " ; true; }'
+
+      - name: Save results to private repo (branch "results")
+        if: always()
+        env:
+          TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          exec >>"$RUNNER_TEMP/workflow_log.txt" 2>&1
+          OUT_DIR="${OUT_DIR:-$RUNNER_TEMP/out}"; mkdir -p "$OUT_DIR"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          RUN_DIR="runs/$(date -u +%Y%m%d-%H%M%S)-phoneupdate-run${GITHUB_RUN_ID}-api${{ matrix.api }}"
+          URL="https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
+          echo "Saving results to branch results, folder $RUN_DIR"
+          for attempt in 1 2 3 4 5; do
+            rm -rf results-repo
+            if git clone -q --depth 1 --filter=blob:none --no-checkout --branch results "$URL" results-repo 2>/dev/null; then
+              git -C results-repo sparse-checkout set --no-cone "/$RUN_DIR/" && git -C results-repo checkout -q results
+            else
+              mkdir results-repo && git -C results-repo init -q -b results && git -C results-repo remote add origin "$URL"
+            fi
+            mkdir -p "results-repo/$RUN_DIR" && cp -r "$OUT_DIR"/. "results-repo/$RUN_DIR"/
+            cp "$RUNNER_TEMP/workflow_log.txt" "results-repo/$RUN_DIR/"
+            git -C results-repo add -A && git -C results-repo commit -q -m "Phone update test results: $RUN_DIR"
+            git -C results-repo push -q origin results && break
+            echo "results branch changed under us (other job?), retry $attempt"; sleep $((attempt * 5))
+          done
+
+      - name: Status
+        if: always()
+        run: |
+          S="$(sed -n 's/.*"status": "\([^"]*\)".*/\1/p' "$RUNNER_TEMP/out/result.json" 2>/dev/null)"; S="${S:-failed}"
+          D="$(sed -n 's/.*"detail": "\([^"]*\)".*/\1/p' "$RUNNER_TEMP/out/result.json" 2>/dev/null)"
+          echo "Android ${{ matrix.android }}: $S${D:+ ($D)}" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$S" = updated ]
