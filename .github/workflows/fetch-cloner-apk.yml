@@ -36,7 +36,10 @@ jobs:
             if grep -q "^${PKG}_" <<<"$HAVE"; then echo "$PKG: already in release APK"; continue; fi
             # apkeep (EFF, open source) uses APKPure's app API; the web download
             # answers 403 to GitHub's runners.
-            ./apkeep -a "$PKG" -d apk-pure dl/ >/dev/null 2>&1 || true
+            for SRC in apk-pure huawei-app-gallery; do
+              ./apkeep -a "$PKG" -d "$SRC" dl/ 2>&1 | tail -3 | sed "s/^/$PKG ($SRC): /"
+              ls dl/"$PKG"*.*apk >/dev/null 2>&1 && break
+            done
             F="$(ls dl/"$PKG"*.apk 2>/dev/null | head -1)"
             X="$(ls dl/"$PKG"*.xapk 2>/dev/null | head -1)"
             if [ -z "$F" ] && [ -n "$X" ]; then
