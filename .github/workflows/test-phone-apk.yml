@@ -80,8 +80,9 @@ jobs:
           # x86_64 too, so the emulator runs ML Kit natively (see app/build.gradle.kts).
           APP_ABIS: x86_64,arm64-v8a
         run: |
-          if ! gradle --no-daemon --console=plain assembleRelease >>"$RUNNER_TEMP/workflow_log.txt" 2>&1; then
-            grep -E "^e: |error:|What went wrong" -A4 "$RUNNER_TEMP/workflow_log.txt" | head -60
+          # The unit tests too (winner pairing, as the workflow's pick_pair).
+          if ! gradle --no-daemon --console=plain assembleRelease testReleaseUnitTest >>"$RUNNER_TEMP/workflow_log.txt" 2>&1; then
+            grep -E "^e: |error:|What went wrong|FAILED|Test.*>" -A4 "$RUNNER_TEMP/workflow_log.txt" | head -60
             exit 1
           fi
           cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/phone-app.apk"
@@ -116,6 +117,11 @@ jobs:
           # Each emulator plays alone: two GitHub machines share no Wi-Fi, so the
           # phones' Wi-Fi pairing is tested on real phones only.
           APP_DEVICE: "0"
+          # Device 2 blocks ads (the app's "Block ads": Private DNS); device 1
+          # does not, so the app's own ad closing is tested there.
+          BLOCK_ADS: ${{ matrix.device == 2 && '1' || '0' }}
+          # Start the app twice: a clone deleted after a loss comes back as a new guest.
+          RERUN: "1"
           WAIT_SEC: "2100"
           CLONES: "2"
         with:
