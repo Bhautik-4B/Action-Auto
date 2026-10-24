@@ -117,9 +117,9 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save
           disable-animations: true
           script: |
-            bash -o pipefail -c 'bash private/scripts/test_phone_update.sh "$APP_APK" "$OUT_DIR/auto" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] |^Update: |^Updated to " ; true; }'
+            bash -o pipefail -c 'bash private/scripts/test_phone_update.sh "$APP_APK" "$OUT_DIR/auto" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8} [AP]M\] |^Update: |^Updated to " ; true; }'
             adb uninstall app.gameauto.phone >/dev/null 2>&1 || true
-            bash -o pipefail -c 'bash private/scripts/test_phone_update_popup.sh "$APP_APK" "$OUT_DIR/popup" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] |^  app: " ; true; }'
+            bash -o pipefail -c 'bash private/scripts/test_phone_update_popup.sh "$APP_APK" "$OUT_DIR/popup" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8} [AP]M\] |^  app: " ; true; }'
 
       - name: Save results to private repo (branch "results")
         if: always()

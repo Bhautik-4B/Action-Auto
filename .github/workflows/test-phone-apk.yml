@@ -131,7 +131,7 @@ jobs:
           disable-animations: true
           # The app's step lines are shown here with guest IDs hidden (public log).
           script: |
-            bash -o pipefail -c 'bash private/scripts/test_phone_app.sh "$GAME_APK" "$APP_APK" "$OUT_DIR" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8}\] " | grep --line-buffered -vE "TAP |step_[0-9]+" | sed -u -E "s/(Guest ID: |guest|expected guest |but got |guest_id.: .)[0-9]+/\1***/g"; true; }'
+            bash -o pipefail -c 'bash private/scripts/test_phone_app.sh "$GAME_APK" "$APP_APK" "$OUT_DIR" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8} [AP]M\] " | grep --line-buffered -vE "TAP |step_[0-9]+" | sed -u -E "s/(Guest ID: |guest|expected guest |but got |guest_id.: .)[0-9]+/\1***/g"; true; }'
 
       - name: Save results to private repo (branch "results")
         if: always()
