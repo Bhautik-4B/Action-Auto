@@ -15,6 +15,11 @@ name: Android Phase 1 - Guest to Lobby
 
 on:
   workflow_dispatch:
+    inputs:
+      check_only:
+        description: "Check only: one copy per device, open the game and log in as a new guest; no betting, no accounts saved, no new run after it"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -41,7 +46,7 @@ jobs:
       # Copies of the game on each device (Shelter work profile + extra users),
       # played one after another on the same emulator, a new guest in each,
       # as many as fit in the time budget (about 22 minutes of play).
-      COPIES: 5
+      COPIES: ${{ inputs.check_only && 1 || 5 }}
     steps:
       # The Android system image needs room; the runner's preinstalled .NET, GHC,
       # CodeQL and Boost are not used here, so free that space first.
@@ -102,7 +107,7 @@ jobs:
           APK="$(ls "$RUNNER_TEMP"/apk/*.apk | grep -vE '/(com\.ludashi\.dualspace|net\.typeblog\.shelter)_' | head -1)"
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
           echo "OUT_DIR=$RUNNER_TEMP/out" >> "$GITHUB_ENV"
-          echo "RUN_SCRIPT=run_explore_dragon_tiger.sh" >> "$GITHUB_ENV"
+          echo "RUN_SCRIPT=${{ inputs.check_only && 'run_phase1.sh' || 'run_explore_dragon_tiger.sh' }}" >> "$GITHUB_ENV"
 
       - name: Install OCR tools
         # "apt-get update" alone can take several minutes; run it only if the
@@ -220,7 +225,7 @@ jobs:
       # AUTO_RESTART to off (Settings > Secrets and variables > Actions > Variables)
       # or disable the workflow in the Actions tab.
       - name: Start a new run
-        if: vars.AUTO_RESTART != 'off'
+        if: vars.AUTO_RESTART != 'off' && !inputs.check_only
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
