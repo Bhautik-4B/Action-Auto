@@ -47,13 +47,30 @@ jobs:
         with:
           gradle-version: "8.14.3"
 
+      # The version is 1.<run>.<attempt>, code <run> * 10 + <attempt>; the app
+      # takes the release with the highest code and installs it only when it is
+      # higher than its own. So every build must get a higher code than any
+      # release there is: a re-run of an old run (run 6, attempt 7 = 67 after run
+      # 7 = 71 had been released) is given the next run number instead.
+      - name: Version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN=$GITHUB_RUN_NUMBER; ATTEMPT=$GITHUB_RUN_ATTEMPT
+          MAX="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' \
+            | sed -n 's/^phone-v1\.\([0-9]*\)\.\([0-9]*\)$/\1 \2/p' | awk '{ c = $1 * 10 + $2; if (c > m) m = c } END { print m + 0 }')"
+          if [ $((RUN * 10 + ATTEMPT)) -le "$MAX" ]; then
+            echo "Run $RUN attempt $ATTEMPT would be version 1.$RUN.$ATTEMPT, not newer than the released code $MAX"
+            RUN=$((MAX / 10 + 1)); ATTEMPT=1
+          fi
+          echo "VERSION_CODE=$((RUN * 10 + ATTEMPT))" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=1.$RUN.$ATTEMPT" >> "$GITHUB_ENV"
+          echo "Building version 1.$RUN.$ATTEMPT (code $((RUN * 10 + ATTEMPT)); newest released code: $MAX)" | tee -a "$GITHUB_STEP_SUMMARY"
+
       # Full output goes to a file; only compile errors are shown here.
       - name: Build
         working-directory: private/android-app
         run: |
-          # A re-run of the same run gets a higher number too, so it installs over the last one.
-          export VERSION_CODE=$((GITHUB_RUN_NUMBER * 10 + GITHUB_RUN_ATTEMPT))
-          export VERSION_NAME="1.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
           if ! gradle --no-daemon --console=plain assembleRelease >"$RUNNER_TEMP/build_log.txt" 2>&1; then
             grep -E "^e: |error:|What went wrong|FAILURE" -A4 "$RUNNER_TEMP/build_log.txt" | head -80
             exit 1
@@ -64,7 +81,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="phone-v1.${{ github.run_number }}.${{ github.run_attempt }}"
+          TAG="phone-v$VERSION_NAME"
           APK="$RUNNER_TEMP/4B-Rummy-Home-$TAG.apk"
           cp private/android-app/app/build/outputs/apk/release/app-release.apk "$APK"
           # A build from a test branch is marked as a pre-release.
@@ -72,12 +89,15 @@ jobs:
           # The tag goes on the default branch: GitHub refuses this token a tag on a
           # branch commit whose workflow files differ from it (HTTP 403).
           gh release create "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" $PRE \
-            --title "4B-Rummy-Home 1.${{ github.run_number }}.${{ github.run_attempt }}" \
+            --title "4B-Rummy-Home $VERSION_NAME" \
             --notes "Android app for real ARM phones. Android 8 or newer. Install the APK, open 4B-Rummy-Home, follow the steps of Setup, then press Start. It updates itself when a new version comes out. Built from branch $GITHUB_REF_NAME."
           echo "Released $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
-          # Only the newest app release is kept: older ones (and their tags) are
-          # deleted. The app updates itself from the newest one.
+          # Only the newest app release is kept: the ones with a lower version
+          # code (and their tags) are deleted. The app updates itself from the
+          # newest one. (A higher one is never deleted, so a release can never
+          # be replaced by an older version.)
           gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' \
-            | grep '^phone-v' | grep -vx "$TAG" | while read -r OLD; do
+            | sed -n 's/^phone-v1\.\([0-9]*\)\.\([0-9]*\)$/& \1 \2/p' | while read -r OLD R A; do
+                [ $((R * 10 + A)) -lt "$VERSION_CODE" ] || continue
                 gh release delete "$OLD" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag && echo "Deleted old release $OLD"
               done || true
