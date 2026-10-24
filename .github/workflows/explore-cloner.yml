@@ -1,11 +1,17 @@
 name: Explore cloner (delete a clone)
 
-# Finds how a clone is deleted in Dual Space Pro (scripts/explore_cloner_delete.sh),
+# Finds how a clone is deleted or renamed in Dual Space Pro (scripts/explore_cloner_delete.sh),
 # for the phone app's clean-up of lost guests. Nothing is played or released.
 # Screens go to branch "results" of the private repo, folder runs/<time>-explorecloner-run<id>.
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "What to explore"
+        type: choice
+        options: [rename, delete]
+        default: rename
   push:
     paths:
       - .github/workflows/explore-cloner.yml
@@ -50,6 +56,8 @@ jobs:
       - name: Explore on the emulator
         timeout-minutes: 20
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          MODE: ${{ inputs.mode || 'rename' }}
         with:
           api-level: 30
           target: google_apis
