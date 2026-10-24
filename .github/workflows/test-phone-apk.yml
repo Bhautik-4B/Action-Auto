@@ -97,6 +97,7 @@ jobs:
             || cp private/apk/*.apk "$RUNNER_TEMP/apk/" 2>/dev/null || { echo "::error::No APK found"; exit 1; }
           APK="$(ls "$RUNNER_TEMP"/apk/*.apk | grep -vE '/(com\.ludashi\.dualspace|net\.typeblog\.shelter|co\.keeptop\.multi\.space|com\.dualspacepro\.multispace)_' | head -1)"
           echo "GAME_APK=$APK" >> "$GITHUB_ENV"
+          echo "OUT_DIR=$RUNNER_TEMP/out" >> "$GITHUB_ENV"
           # The cloner app from release APK, as in Phase 1 (Multi Space, else Dual
           # Space Pro, else Dual Space); the app plays 2 clones of the game in it.
           gh release download APK --repo "$PRIVATE_REPO" --pattern '*.apk' --dir "$RUNNER_TEMP/apk" --skip-existing 2>/dev/null || true
