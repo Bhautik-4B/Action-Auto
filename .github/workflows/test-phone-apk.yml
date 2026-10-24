@@ -17,6 +17,11 @@ on:
         type: choice
         options: [bet, table, login]
         default: bet
+      screens:
+        description: "Phone shapes: same (1080x2280 on both) or mixed (device 1: 20:9 1080x2400, device 2: 16:9 1080x1920)"
+        type: choice
+        options: [same, mixed]
+        default: same
   push:
     paths:
       - .github/workflows/test-phone-apk.yml
@@ -122,6 +127,7 @@ jobs:
           BLOCK_ADS: ${{ matrix.device == 2 && '1' || '0' }}
           # Start the app twice: a clone deleted after a loss comes back as a new guest.
           RERUN: "1"
+          SCREEN_SIZE: ${{ inputs.screens == 'mixed' && (matrix.device == 1 && '1080x2400' || '1080x1920') || '' }}
           WAIT_SEC: "2100"
           CLONES: "2"
         with:
