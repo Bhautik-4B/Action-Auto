@@ -21,6 +21,9 @@ on:
       pay_page:
         description: "Our website payment page (empty = the server's own /pay page), e.g. https://pay.wereplyx.com/rummy-home"
         default: ""
+      server:
+        description: "A running server to check instead (e.g. https://4brummyhome.synoventum.us.cc): live mode, nothing paid, its test accounts deleted"
+        default: ""
       times:
         description: "How many checks in a row"
         default: "3"
@@ -51,7 +54,14 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Server to check
+        if: inputs.server != ''
+        run: |
+          echo "BACKEND_URL=${{ inputs.server }}" >> "$GITHUB_ENV"
+          curl -sf "${{ inputs.server }}/healthz"; echo
+
       - name: Public address
+        if: inputs.server == ''
         run: |
           curl -fsSL -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 && chmod +x cloudflared
           setsid nohup ./cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8080 > "$RUNNER_TEMP/tunnel.log" 2>&1 < /dev/null &
@@ -60,6 +70,7 @@ jobs:
           echo "BACKEND_URL=$U" >> "$GITHUB_ENV"
 
       - name: Start backend (Cashfree ${{ inputs.mode }})
+        if: inputs.server == ''
         working-directory: private/backend
         env:
           CF_ID: ${{ secrets.CASHFREE_APP_ID }}
@@ -85,12 +96,12 @@ jobs:
           cp "$GITHUB_WORKSPACE/private/scripts/check_payment.mjs" .
           set +e; fails=0
           for t in $(seq 1 "${{ inputs.times }}"); do
-            CHECK_MODE="${{ inputs.mode }}" node check_payment.mjs "$BACKEND_URL" "$RUNNER_TEMP/out/try$t" || fails=$((fails+1))
+            CHECK_MODE="${{ inputs.server != '' && 'production' || inputs.mode }}" node check_payment.mjs "$BACKEND_URL" "$RUNNER_TEMP/out/try$t" || fails=$((fails+1))
             { echo "try $t:"; cat "$RUNNER_TEMP/out/try$t/payment_check.txt"; } >> "$RUNNER_TEMP/out/payment_check.txt"
           done
           echo "$fails" > "$RUNNER_TEMP/out/exit"
           # Server log without secrets (the server never logs keys or bodies).
-          grep -viE "secret|x-client" "$RUNNER_TEMP/server.log" | tail -200 > "$RUNNER_TEMP/out/server.log"
+          [ -f "$RUNNER_TEMP/server.log" ] && grep -viE "secret|x-client" "$RUNNER_TEMP/server.log" | tail -200 > "$RUNNER_TEMP/out/server.log" || true
           { echo '```'; cat "$RUNNER_TEMP/out/payment_check.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Save to private repo (branch "results")
