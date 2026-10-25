@@ -1,4 +1,4 @@
-name: Payment check (Cashfree test mode)
+name: Payment check (Cashfree)
 
 # Runs the backend (private repo) with the Cashfree TEST keys from this repo's
 # secrets behind a Cloudflare quick tunnel, then scripts/check_payment.mjs pays
@@ -13,6 +13,17 @@ on:
       ref:
         description: "Branch of the private repo"
         default: "claude/magical-maxwell-17buee"
+      mode:
+        description: "sandbox = pays with Cashfree test UPI; production = live keys, real orders and live checkout, NO payment made"
+        type: choice
+        options: [sandbox, production]
+        default: sandbox
+      pay_page:
+        description: "Our website payment page (empty = the server's own /pay page), e.g. https://pay.wereplyx.com/rummy-home"
+        default: ""
+      times:
+        description: "How many checks in a row"
+        default: "3"
 
 permissions:
   contents: read
@@ -48,16 +59,21 @@ jobs:
           [ -n "$U" ] || { echo "::error::No tunnel address"; exit 1; }
           echo "BACKEND_URL=$U" >> "$GITHUB_ENV"
 
-      - name: Start backend (Cashfree TEST mode)
+      - name: Start backend (Cashfree ${{ inputs.mode }})
         working-directory: private/backend
         env:
           CF_ID: ${{ secrets.CASHFREE_APP_ID }}
           CF_KEY: ${{ secrets.CASHFREE_SECRET_KEY }}
         run: |
           [ -n "$CF_ID" ] && [ -n "$CF_KEY" ] || { echo "::error::Secrets CASHFREE_APP_ID / CASHFREE_SECRET_KEY are missing"; exit 1; }
+          # Safe hints only (never the keys): which kind of keys these are.
+          kind() { case "$1" in *_test_*|TEST*) echo test;; *_prod_*) echo LIVE;; *) echo unknown;; esac; }
+          sp() { case "$1" in *[[:space:]]*) echo yes;; *) echo no;; esac; }
+          echo "App ID: kind=$(kind "$CF_ID") length=${#CF_ID} spaces=$(sp "$CF_ID")"
+          echo "Secret: kind=$(kind "$CF_KEY") length=${#CF_KEY} spaces=$(sp "$CF_KEY")"
           npm ci --no-audit --no-fund >/dev/null
           JWT_SECRET="$(openssl rand -hex 32)" HOST=127.0.0.1 PORT=8080 DB_PATH="$RUNNER_TEMP/app.db" NODE_ENV=production TRUST_PROXY=1 \
-            PUBLIC_BASE_URL="$BACKEND_URL" CASHFREE_ENV=sandbox CASHFREE_APP_ID="$CF_ID" CASHFREE_SECRET_KEY="$CF_KEY" \
+            PUBLIC_BASE_URL="$BACKEND_URL" CASHFREE_ENV="${{ inputs.mode }}" PAY_PAGE_URL="${{ inputs.pay_page }}" CASHFREE_APP_ID="$CF_ID" CASHFREE_SECRET_KEY="$CF_KEY" \
             setsid nohup node src/server.js > "$RUNNER_TEMP/server.log" 2>&1 < /dev/null &
           for i in $(seq 1 60); do curl -sf "$BACKEND_URL/healthz" >/dev/null && break; sleep 2; done
           curl -sf "$BACKEND_URL/healthz" || { echo "::error::Backend not reachable"; tail -20 "$RUNNER_TEMP/server.log"; exit 1; }
@@ -67,7 +83,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/out" && cd "$RUNNER_TEMP"
           npm init -y >/dev/null && npm i --no-audit --no-fund playwright@1.48.2 >/dev/null && npx playwright install --with-deps chromium >/dev/null
           cp "$GITHUB_WORKSPACE/private/scripts/check_payment.mjs" .
-          set +e; node check_payment.mjs "$BACKEND_URL" "$RUNNER_TEMP/out"; echo $? > "$RUNNER_TEMP/out/exit"
+          set +e; fails=0
+          for t in $(seq 1 "${{ inputs.times }}"); do
+            CHECK_MODE="${{ inputs.mode }}" node check_payment.mjs "$BACKEND_URL" "$RUNNER_TEMP/out/try$t" || fails=$((fails+1))
+            { echo "try $t:"; cat "$RUNNER_TEMP/out/try$t/payment_check.txt"; } >> "$RUNNER_TEMP/out/payment_check.txt"
+          done
+          echo "$fails" > "$RUNNER_TEMP/out/exit"
           # Server log without secrets (the server never logs keys or bodies).
           grep -viE "secret|x-client" "$RUNNER_TEMP/server.log" | tail -200 > "$RUNNER_TEMP/out/server.log"
           { echo '```'; cat "$RUNNER_TEMP/out/payment_check.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

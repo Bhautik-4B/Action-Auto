@@ -109,7 +109,7 @@ jobs:
           exec >>"$RUNNER_TEMP/workflow_log.txt" 2>&1
           npm ci --no-audit --no-fund
           B="$RUNNER_TEMP/backend"; mkdir -p "$B"
-          JWT_SECRET="$(openssl rand -hex 32)" HOST=127.0.0.1 PORT=8080 DB_PATH="$B/app.db" NODE_ENV=production \
+          JWT_SECRET="$(openssl rand -hex 32)" HOST=127.0.0.1 PORT=8080 DB_PATH="$B/app.db" NODE_ENV=production ALLOW_DIRECT_TOPUP=1 \
             setsid nohup node src/server.js > "$B/server.log" 2>&1 < /dev/null &
           for i in $(seq 1 60); do curl -sf http://127.0.0.1:8080/healthz && break; sleep 1; done
           curl -sf http://127.0.0.1:8080/healthz || { echo "::error::Backend did not start"; tail -50 "$B/server.log"; exit 1; }
