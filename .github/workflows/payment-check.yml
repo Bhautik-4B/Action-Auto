@@ -18,6 +18,9 @@ on:
         type: choice
         options: [sandbox, production]
         default: sandbox
+      pay_page:
+        description: "Our website payment page (empty = the server's own /pay page), e.g. https://pay.wereplyx.com/rummy-home"
+        default: ""
       times:
         description: "How many checks in a row"
         default: "3"
@@ -70,7 +73,7 @@ jobs:
           echo "Secret: kind=$(kind "$CF_KEY") length=${#CF_KEY} spaces=$(sp "$CF_KEY")"
           npm ci --no-audit --no-fund >/dev/null
           JWT_SECRET="$(openssl rand -hex 32)" HOST=127.0.0.1 PORT=8080 DB_PATH="$RUNNER_TEMP/app.db" NODE_ENV=production TRUST_PROXY=1 \
-            PUBLIC_BASE_URL="$BACKEND_URL" CASHFREE_ENV="${{ inputs.mode }}" CASHFREE_APP_ID="$CF_ID" CASHFREE_SECRET_KEY="$CF_KEY" \
+            PUBLIC_BASE_URL="$BACKEND_URL" CASHFREE_ENV="${{ inputs.mode }}" PAY_PAGE_URL="${{ inputs.pay_page }}" CASHFREE_APP_ID="$CF_ID" CASHFREE_SECRET_KEY="$CF_KEY" \
             setsid nohup node src/server.js > "$RUNNER_TEMP/server.log" 2>&1 < /dev/null &
           for i in $(seq 1 60); do curl -sf "$BACKEND_URL/healthz" >/dev/null && break; sleep 2; done
           curl -sf "$BACKEND_URL/healthz" || { echo "::error::Backend not reachable"; tail -20 "$RUNNER_TEMP/server.log"; exit 1; }
