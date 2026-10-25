@@ -21,7 +21,7 @@ on:
       release:
         description: "Publish the app with this address as the release (all testers' phones update to it)"
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: read
@@ -51,16 +51,6 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Start backend
-        working-directory: private/backend
-        run: |
-          npm ci --no-audit --no-fund >/dev/null
-          B="$RUNNER_TEMP/backend"; mkdir -p "$B"
-          JWT_SECRET="$(openssl rand -hex 32)" HOST=127.0.0.1 PORT=8080 DB_PATH="$B/app.db" NODE_ENV=production TRUST_PROXY=1 \
-            setsid nohup node src/server.js > "$B/server.log" 2>&1 < /dev/null &
-          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8080/healthz >/dev/null && break; sleep 1; done
-          curl -sf http://127.0.0.1:8080/healthz
-
       - name: Public address (Cloudflare quick tunnel)
         run: |
           curl -fsSL -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
@@ -70,10 +60,27 @@ jobs:
             U="$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$RUNNER_TEMP/tunnel.log" | head -1)"; [ -n "$U" ] && break; sleep 2
           done
           [ -n "$U" ] || { echo "::error::No tunnel address"; tail -30 "$RUNNER_TEMP/tunnel.log"; exit 1; }
-          for i in $(seq 1 30); do curl -sf "$U/healthz" >/dev/null && break; sleep 3; done
-          curl -sf "$U/healthz" || { echo "::error::Tunnel does not reach the backend"; exit 1; }
           echo "BACKEND_URL=$U" >> "$GITHUB_ENV"
           { echo "## Temporary backend (testing)"; echo "Address: $U"; echo "Up until about $(TZ=Asia/Kolkata date -d "+${{ inputs.hours }} hours" '+%d %b %H:%M IST')"; } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Start backend
+        working-directory: private/backend
+        env:
+          CF_ID: ${{ secrets.CASHFREE_APP_ID }}
+          CF_KEY: ${{ secrets.CASHFREE_SECRET_KEY }}
+        run: |
+          npm ci --no-audit --no-fund >/dev/null
+          B="$RUNNER_TEMP/backend"; mkdir -p "$B"
+          # Cashfree in TEST mode (sandbox), keys from the repo's secrets; without
+          # them the server runs without payments (direct top-up for testing).
+          JWT_SECRET="$(openssl rand -hex 32)" HOST=127.0.0.1 PORT=8080 DB_PATH="$B/app.db" NODE_ENV=production TRUST_PROXY=1 \
+            PUBLIC_BASE_URL="$BACKEND_URL" CASHFREE_ENV=sandbox CASHFREE_APP_ID="$CF_ID" CASHFREE_SECRET_KEY="$CF_KEY" \
+            setsid nohup node src/server.js > "$B/server.log" 2>&1 < /dev/null &
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8080/healthz >/dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:8080/healthz || { echo "::error::Backend did not start"; tail -20 "$B/server.log"; exit 1; }
+          for i in $(seq 1 30); do curl -sf "$BACKEND_URL/healthz" >/dev/null && break; sleep 3; done
+          curl -sf "$BACKEND_URL/healthz" || { echo "::error::The public address does not reach the backend"; exit 1; }
+          if [ -n "$CF_ID" ]; then echo "Payments: Cashfree TEST mode" | tee -a "$GITHUB_STEP_SUMMARY"; else echo "Payments: off (no Cashfree secrets): direct top-up" | tee -a "$GITHUB_STEP_SUMMARY"; fi
 
       # release: the normal release build, with this address built in.
       - name: Release the app with this address
