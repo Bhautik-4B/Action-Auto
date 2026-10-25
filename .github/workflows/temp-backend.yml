@@ -1,0 +1,120 @@
+name: Temporary backend (testing)
+
+# FOR TESTING ONLY. Runs the backend (folder backend of the PRIVATE repo
+# Bhautik-4B/Game-Auto) on this runner for a few hours, makes it public through
+# a Cloudflare quick tunnel (https://<random>.trycloudflare.com, no account),
+# and builds a TEST phone APK that uses it. The database is thrown away when
+# the run ends; the address changes on every run. The APK is saved to the
+# private repo, branch "results", folder temp-backend/<time>-run<id>/ (it is
+# not released, so no phone updates to it by itself).
+
+on:
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "How long the backend stays up (hours, at most 5.5)"
+        default: "5"
+      ref:
+        description: "Branch of the private repo to run and build"
+        default: "main"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: temp-backend
+  cancel-in-progress: true
+
+env:
+  PRIVATE_REPO: Bhautik-4B/Game-Auto
+
+jobs:
+  serve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    steps:
+      - name: Checkout private repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          path: private
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Start backend
+        working-directory: private/backend
+        run: |
+          npm ci --no-audit --no-fund >/dev/null
+          B="$RUNNER_TEMP/backend"; mkdir -p "$B"
+          JWT_SECRET="$(openssl rand -hex 32)" HOST=127.0.0.1 PORT=8080 DB_PATH="$B/app.db" NODE_ENV=production TRUST_PROXY=1 \
+            setsid nohup node src/server.js > "$B/server.log" 2>&1 < /dev/null &
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8080/healthz >/dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:8080/healthz
+
+      - name: Public address (Cloudflare quick tunnel)
+        run: |
+          curl -fsSL -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared
+          setsid nohup ./cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8080 > "$RUNNER_TEMP/tunnel.log" 2>&1 < /dev/null &
+          for i in $(seq 1 60); do
+            U="$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$RUNNER_TEMP/tunnel.log" | head -1)"; [ -n "$U" ] && break; sleep 2
+          done
+          [ -n "$U" ] || { echo "::error::No tunnel address"; tail -30 "$RUNNER_TEMP/tunnel.log"; exit 1; }
+          for i in $(seq 1 30); do curl -sf "$U/healthz" >/dev/null && break; sleep 3; done
+          curl -sf "$U/healthz" || { echo "::error::Tunnel does not reach the backend"; exit 1; }
+          echo "BACKEND_URL=$U" >> "$GITHUB_ENV"
+          { echo "## Temporary backend (testing)"; echo "Address: $U"; echo "Up until about $(TZ=Asia/Kolkata date -d "+${{ inputs.hours }} hours" '+%d %b %H:%M IST')"; } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+
+      # Same key and version code as the newest release, so it installs over the
+      # released app; the next real release (a higher code) replaces it again.
+      - name: Build test APK with this address
+        working-directory: private/android-app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CODE="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' \
+            | sed -n 's/^phone-v1\.\([0-9]*\)\.\([0-9]*\)$/\1 \2/p' | awk '{ c = $1 * 10 + $2; if (c > m) m = c } END { print m + 0 }')"
+          export VERSION_CODE="${CODE:-1}" VERSION_NAME="test-backend-run${GITHUB_RUN_ID}"
+          gradle --no-daemon --console=plain assembleRelease > "$RUNNER_TEMP/build_log.txt" 2>&1 \
+            || { grep -E "^e: |error:|What went wrong" -A4 "$RUNNER_TEMP/build_log.txt" | head -60; exit 1; }
+          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/4B-Rummy-Home-test-backend.apk"
+
+      - name: Save test APK to private repo (branch "results")
+        env:
+          TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          DIR="temp-backend/$(TZ=Asia/Kolkata date +%Y%m%d-%H%M)-run${GITHUB_RUN_ID}"
+          URL="https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
+          for attempt in 1 2 3 4 5; do
+            rm -rf r && git clone -q --depth 1 --filter=blob:none --no-checkout --branch results "$URL" r \
+              && git -C r sparse-checkout set --no-cone "/$DIR/" && git -C r checkout -q results || exit 1
+            mkdir -p "r/$DIR" && cp "$RUNNER_TEMP/4B-Rummy-Home-test-backend.apk" "r/$DIR/"
+            echo "$BACKEND_URL" > "r/$DIR/address.txt"
+            git -C r add -A && git -C r commit -q -m "Temporary backend test APK: $DIR" && git -C r push -q origin results && break
+            sleep $((attempt * 5))
+          done
+          echo "Test APK: private repo, branch results, $DIR/4B-Rummy-Home-test-backend.apk" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Stays up for the hours asked; a health line every 10 minutes.
+      - name: Serve
+        run: |
+          END=$(( $(date +%s) + $(awk "BEGIN{h=${{ inputs.hours }}; if(h>5.5)h=5.5; print int(h*3600)}") ))
+          while [ "$(date +%s)" -lt "$END" ]; do
+            echo "$(TZ=Asia/Kolkata date '+%H:%M') $(curl -s -o /dev/null -w '%{http_code}' "$BACKEND_URL/healthz")"
+            sleep 600
+          done
