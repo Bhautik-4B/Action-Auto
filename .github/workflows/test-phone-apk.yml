@@ -42,9 +42,10 @@ on:
         options: [dualspace, clonemaster]
         default: dualspace
       probe:
-        description: "Only explore the cloner (screens, UI trees, direct opens) instead of the app test"
-        type: boolean
-        default: false
+        description: "Explore instead of the app test: cloner = the cloner's screens and direct opens; game = stop at the game's lobby, open Setting and the avatar (screenshots)"
+        type: choice
+        options: ["no", cloner, game]
+        default: "no"
       stop_start:
         description: "Device 1 presses Stop on the app's box mid-run and Start again at once: the new run must show its box and play"
         type: boolean
@@ -67,7 +68,7 @@ permissions:
 
 concurrency:
   # One queue per phone shape: a "mixed" run and a normal one run side by side.
-  group: test-phone-apk-${{ inputs.screens || 'same' }}-${{ inputs.android || '11' }}-${{ inputs.network || 'normal' }}-${{ inputs.cloner || 'dualspace' }}-${{ inputs.image || 'google_apis' }}-${{ inputs.probe && 'probe' || 'test' }}-${{ inputs.perm_off && 'permoff' || 'on' }}-${{ inputs.stop_start && 'ss' || 'x' }}
+  group: test-phone-apk-${{ inputs.screens || 'same' }}-${{ inputs.android || '11' }}-${{ inputs.network || 'normal' }}-${{ inputs.cloner || 'dualspace' }}-${{ inputs.image || 'google_apis' }}-${{ inputs.probe || 'no' }}-${{ inputs.perm_off && 'permoff' || 'on' }}-${{ inputs.stop_start && 'ss' || 'x' }}
   cancel-in-progress: false
 
 env:
@@ -200,7 +201,8 @@ jobs:
           NETWORK_SPEED: ${{ (inputs.network == 'slow' && 'umts') || (inputs.network == 'very_slow' && 'edge') || '' }}
           AS_PHONE: ${{ (inputs.network == 'slow' || inputs.network == 'very_slow') && '1' || '0' }}
           CLONES: "2"
-          PROBE_CLONER: ${{ inputs.probe && '1' || '0' }}
+          PROBE_CLONER: ${{ inputs.probe == 'cloner' && '1' || '0' }}
+          PROBE_GAME: ${{ inputs.probe == 'game' && '1' || '0' }}
           PERM_OFF: ${{ (inputs.perm_off && matrix.device == 1) && '1' || '0' }}
           STOP_START: ${{ (inputs.stop_start && matrix.device == 1) && '1' || '0' }}
         with:
