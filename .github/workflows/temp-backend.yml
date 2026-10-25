@@ -3,7 +3,8 @@ name: Temporary backend (testing)
 # FOR TESTING ONLY. Runs the backend (folder backend of the PRIVATE repo
 # Bhautik-4B/Game-Auto) on this runner for a few hours, makes it public through
 # a Cloudflare quick tunnel (https://<random>.trycloudflare.com, no account),
-# and builds a TEST phone APK that uses it. The database is thrown away when
+# and (release: true) publishes the app release with that address built in, so
+# the testers' phones update to it; (release: false) only a TEST APK instead. The database is thrown away when
 # the run ends; the address changes on every run. The APK is saved to the
 # private repo, branch "results", folder temp-backend/<time>-run<id>/ (it is
 # not released, so no phone updates to it by itself).
@@ -17,9 +18,14 @@ on:
       ref:
         description: "Branch of the private repo to run and build"
         default: "main"
+      release:
+        description: "Publish the app with this address as the release (all testers' phones update to it)"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
+  actions: write   # starts "Build phone APK" with this address (release: true)
 
 concurrency:
   group: temp-backend
@@ -69,18 +75,30 @@ jobs:
           echo "BACKEND_URL=$U" >> "$GITHUB_ENV"
           { echo "## Temporary backend (testing)"; echo "Address: $U"; echo "Up until about $(TZ=Asia/Kolkata date -d "+${{ inputs.hours }} hours" '+%d %b %H:%M IST')"; } | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # release: the normal release build, with this address built in.
+      - name: Release the app with this address
+        if: inputs.release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run build-phone-apk.yml --repo "$GITHUB_REPOSITORY" --ref main -f backend_url="$BACKEND_URL"
+          echo "Release build started with backend $BACKEND_URL" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/setup-java@v4
+        if: ${{ !inputs.release }}
         with:
           distribution: temurin
           java-version: "17"
 
       - uses: gradle/actions/setup-gradle@v4
+        if: ${{ !inputs.release }}
         with:
           gradle-version: "8.14.3"
 
       # Same key and version code as the newest release, so it installs over the
       # released app; the next real release (a higher code) replaces it again.
       - name: Build test APK with this address
+        if: ${{ !inputs.release }}
         working-directory: private/android-app
         env:
           GH_TOKEN: ${{ github.token }}
@@ -93,6 +111,7 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/4B-Rummy-Home-test-backend.apk"
 
       - name: Save test APK to private repo (branch "results")
+        if: ${{ !inputs.release }}
         env:
           TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: |

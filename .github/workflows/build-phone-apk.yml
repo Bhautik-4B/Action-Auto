@@ -3,14 +3,17 @@ name: Build phone APK
 # Builds the phone app (source: folder android-app of the PRIVATE repo
 # Bhautik-4B/Game-Auto, reached with the PRIVATE_REPO_TOKEN secret) and
 # publishes the APK as a release of this repo, for real ARM phones instead of
-# the emulator. Click "Run workflow"; it also runs when this file changes.
+# the emulator. Click "Run workflow" (backend_url: the app saves to that
+# backend; empty = the backend is off in the app).
 # The APK is public here: anyone can download it.
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - .github/workflows/build-phone-apk.yml
+    inputs:
+      backend_url:
+        description: "Backend address built into the app (https://...); empty = backend off"
+        required: false
+        default: ""
 
 permissions:
   contents: write   # create the release
@@ -70,6 +73,8 @@ jobs:
       # Full output goes to a file; only compile errors are shown here.
       - name: Build
         working-directory: private/android-app
+        env:
+          BACKEND_URL: ${{ inputs.backend_url }}
         run: |
           if ! gradle --no-daemon --console=plain assembleRelease >"$RUNNER_TEMP/build_log.txt" 2>&1; then
             grep -E "^e: |error:|What went wrong|FAILURE" -A4 "$RUNNER_TEMP/build_log.txt" | head -80
@@ -80,6 +85,7 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          BACKEND_URL: ${{ inputs.backend_url }}
         run: |
           TAG="phone-v$VERSION_NAME"
           APK="$RUNNER_TEMP/4B-Rummy-Home-$TAG.apk"
@@ -90,7 +96,7 @@ jobs:
           # branch commit whose workflow files differ from it (HTTP 403).
           gh release create "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" $PRE \
             --title "4B-Rummy-Home $VERSION_NAME" \
-            --notes "Android app for real ARM phones. Android 8 or newer. Install the APK, open 4B-Rummy-Home, follow the steps of Setup, then press Start. It updates itself when a new version comes out. Built from branch $GITHUB_REF_NAME."
+            --notes "Android app for real ARM phones. Android 8 or newer. Install the APK, open 4B-Rummy-Home, follow the steps of Setup, then press Start. It updates itself when a new version comes out. Built from branch $GITHUB_REF_NAME.${BACKEND_URL:+ Backend: $BACKEND_URL}"
           echo "Released $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
           # Only the newest app release is kept: the ones with a lower version
           # code (and their tags) are deleted. The app updates itself from the
