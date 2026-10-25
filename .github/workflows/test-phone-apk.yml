@@ -31,6 +31,11 @@ on:
         type: choice
         options: ["11", "10", "12"]
         default: "11"
+      network:
+        description: "Network of the emulators: slow ones make the game load slowly (the app then plays as on a real phone, without time limits)"
+        type: choice
+        options: [normal, slow, very_slow]
+        default: normal
   push:
     paths:
       - .github/workflows/test-phone-apk.yml
@@ -40,7 +45,7 @@ permissions:
 
 concurrency:
   # One queue per phone shape: a "mixed" run and a normal one run side by side.
-  group: test-phone-apk-${{ inputs.screens || 'same' }}-${{ inputs.android || '11' }}
+  group: test-phone-apk-${{ inputs.screens || 'same' }}-${{ inputs.android || '11' }}-${{ inputs.network || 'normal' }}
   cancel-in-progress: false
 
 env:
@@ -161,7 +166,9 @@ jobs:
           # Start the app twice: a clone deleted after a loss comes back as a new guest.
           RERUN: "1"
           SCREEN_SIZE: ${{ (inputs.screens == 'mixed' && (matrix.device == 1 && '1080x2400' || '1080x1920')) || (inputs.screens == 'small' && (matrix.device == 1 && '720x1600' || '1200x1920')) || (inputs.screens == 'extreme' && (matrix.device == 1 && '1080x2520' || '1536x2048')) || '' }}
-          WAIT_SEC: "2100"
+          WAIT_SEC: ${{ (inputs.network == 'slow' || inputs.network == 'very_slow') && '2700' || '2100' }}
+          NETWORK_SPEED: ${{ (inputs.network == 'slow' && 'umts') || (inputs.network == 'very_slow' && 'edge') || '' }}
+          AS_PHONE: ${{ (inputs.network == 'slow' || inputs.network == 'very_slow') && '1' || '0' }}
           CLONES: "2"
         with:
           api-level: ${{ (inputs.android == '10' && 29) || (inputs.android == '12' && 31) || 30 }}
