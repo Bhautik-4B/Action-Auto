@@ -55,6 +55,11 @@ jobs:
           CF_KEY: ${{ secrets.CASHFREE_SECRET_KEY }}
         run: |
           [ -n "$CF_ID" ] && [ -n "$CF_KEY" ] || { echo "::error::Secrets CASHFREE_APP_ID / CASHFREE_SECRET_KEY are missing"; exit 1; }
+          # Safe hints only (never the keys): which kind of keys these are.
+          kind() { case "$1" in *_test_*|TEST*) echo test;; *_prod_*) echo LIVE;; *) echo unknown;; esac; }
+          sp() { case "$1" in *[[:space:]]*) echo yes;; *) echo no;; esac; }
+          echo "App ID: kind=$(kind "$CF_ID") length=${#CF_ID} spaces=$(sp "$CF_ID")"
+          echo "Secret: kind=$(kind "$CF_KEY") length=${#CF_KEY} spaces=$(sp "$CF_KEY")"
           npm ci --no-audit --no-fund >/dev/null
           JWT_SECRET="$(openssl rand -hex 32)" HOST=127.0.0.1 PORT=8080 DB_PATH="$RUNNER_TEMP/app.db" NODE_ENV=production TRUST_PROXY=1 \
             PUBLIC_BASE_URL="$BACKEND_URL" CASHFREE_ENV=sandbox CASHFREE_APP_ID="$CF_ID" CASHFREE_SECRET_KEY="$CF_KEY" \
