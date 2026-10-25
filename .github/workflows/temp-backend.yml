@@ -28,7 +28,7 @@ permissions:
   actions: write   # starts "Build phone APK" with this address (release: true)
 
 concurrency:
-  group: temp-backend
+  group: temp-backend-${{ github.ref_name }}
   cancel-in-progress: true
 
 env:
