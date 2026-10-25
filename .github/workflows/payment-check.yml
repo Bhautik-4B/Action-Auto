@@ -1,0 +1,93 @@
+name: Payment check (Cashfree test mode)
+
+# Runs the backend (private repo) with the Cashfree TEST keys from this repo's
+# secrets behind a Cloudflare quick tunnel, then scripts/check_payment.mjs pays
+# a ₹100 test order in a real browser with Cashfree's sandbox UPI ID and checks
+# the wallet. No real money; the server and its data end with the run.
+# Screenshots and the report go to the private repo, branch "results",
+# folder payment-check/<time>-run<id>.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch of the private repo"
+        default: "claude/magical-maxwell-17buee"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: payment-check
+  cancel-in-progress: true
+
+env:
+  PRIVATE_REPO: Bhautik-4B/Game-Auto
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          path: private
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Public address
+        run: |
+          curl -fsSL -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 && chmod +x cloudflared
+          setsid nohup ./cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8080 > "$RUNNER_TEMP/tunnel.log" 2>&1 < /dev/null &
+          for i in $(seq 1 60); do U="$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$RUNNER_TEMP/tunnel.log" | head -1)"; [ -n "$U" ] && break; sleep 2; done
+          [ -n "$U" ] || { echo "::error::No tunnel address"; exit 1; }
+          echo "BACKEND_URL=$U" >> "$GITHUB_ENV"
+
+      - name: Start backend (Cashfree TEST mode)
+        working-directory: private/backend
+        env:
+          CF_ID: ${{ secrets.CASHFREE_APP_ID }}
+          CF_KEY: ${{ secrets.CASHFREE_SECRET_KEY }}
+        run: |
+          [ -n "$CF_ID" ] && [ -n "$CF_KEY" ] || { echo "::error::Secrets CASHFREE_APP_ID / CASHFREE_SECRET_KEY are missing"; exit 1; }
+          npm ci --no-audit --no-fund >/dev/null
+          JWT_SECRET="$(openssl rand -hex 32)" HOST=127.0.0.1 PORT=8080 DB_PATH="$RUNNER_TEMP/app.db" NODE_ENV=production TRUST_PROXY=1 \
+            PUBLIC_BASE_URL="$BACKEND_URL" CASHFREE_ENV=sandbox CASHFREE_APP_ID="$CF_ID" CASHFREE_SECRET_KEY="$CF_KEY" \
+            setsid nohup node src/server.js > "$RUNNER_TEMP/server.log" 2>&1 < /dev/null &
+          for i in $(seq 1 60); do curl -sf "$BACKEND_URL/healthz" >/dev/null && break; sleep 2; done
+          curl -sf "$BACKEND_URL/healthz" || { echo "::error::Backend not reachable"; tail -20 "$RUNNER_TEMP/server.log"; exit 1; }
+
+      - name: Pay a test order in a browser
+        run: |
+          mkdir -p "$RUNNER_TEMP/out" && cd "$RUNNER_TEMP"
+          npm init -y >/dev/null && npm i --no-audit --no-fund playwright@1.48.2 >/dev/null && npx playwright install --with-deps chromium >/dev/null
+          cp "$GITHUB_WORKSPACE/private/scripts/check_payment.mjs" .
+          set +e; node check_payment.mjs "$BACKEND_URL" "$RUNNER_TEMP/out"; echo $? > "$RUNNER_TEMP/out/exit"
+          # Server log without secrets (the server never logs keys or bodies).
+          grep -viE "secret|x-client" "$RUNNER_TEMP/server.log" | tail -200 > "$RUNNER_TEMP/out/server.log"
+          { echo '```'; cat "$RUNNER_TEMP/out/payment_check.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save to private repo (branch "results")
+        if: always()
+        env:
+          TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          DIR="payment-check/$(TZ=Asia/Kolkata date +%Y%m%d-%H%M)-run${GITHUB_RUN_ID}"
+          URL="https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
+          for attempt in 1 2 3 4 5; do
+            rm -rf r && git clone -q --depth 1 --filter=blob:none --no-checkout --branch results "$URL" r \
+              && git -C r sparse-checkout set --no-cone "/$DIR/" && git -C r checkout -q results || exit 1
+            mkdir -p "r/$DIR" && cp -r "$RUNNER_TEMP/out"/. "r/$DIR"/
+            git -C r add -A && git -C r commit -q -m "Payment check: $DIR" && git -C r push -q origin results && break
+            sleep $((attempt * 5))
+          done
+
+      - name: Result
+        run: '[ "$(cat "$RUNNER_TEMP/out/exit" 2>/dev/null)" = 0 ] || { echo "::error::Payment check failed"; exit 1; }'
