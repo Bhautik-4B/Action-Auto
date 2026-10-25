@@ -14,6 +14,10 @@ on:
         description: "Backend address built into the app (https://...); empty = backend off"
         required: false
         default: ""
+      qa:
+        description: "QA build only: the APK is a download of this run (Artifacts), NOT a release. Phones never see it and no release is deleted."
+        type: boolean
+        default: false
 
 permissions:
   contents: write   # create the release
@@ -67,7 +71,7 @@ jobs:
             RUN=$((MAX / 10 + 1)); ATTEMPT=1
           fi
           echo "VERSION_CODE=$((RUN * 10 + ATTEMPT))" >> "$GITHUB_ENV"
-          echo "VERSION_NAME=1.$RUN.$ATTEMPT" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=1.$RUN.$ATTEMPT${{ inputs.qa && '-qa' || '' }}" >> "$GITHUB_ENV"
           echo "Building version 1.$RUN.$ATTEMPT (code $((RUN * 10 + ATTEMPT)); newest released code: $MAX)" | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Full output goes to a file; only compile errors are shown here.
@@ -82,7 +86,24 @@ jobs:
           fi
           ls -l app/build/outputs/apk/release/
 
+      # QA: only a download of this run. Phones look at releases only (Updater),
+      # so a QA build never reaches users, and the live release stays.
+      - name: QA APK (download, not a release)
+        if: ${{ inputs.qa }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/qa"
+          cp private/android-app/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/qa/4B-Rummy-Home-$VERSION_NAME.apk"
+          echo "QA build $VERSION_NAME: download it under Artifacts of this run. Not released." | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload QA APK
+        if: ${{ inputs.qa }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: 4B-Rummy-Home-${{ env.VERSION_NAME }}
+          path: ${{ runner.temp }}/qa/*.apk
+          retention-days: 30
+
       - name: Publish release
+        if: ${{ !inputs.qa }}
         env:
           GH_TOKEN: ${{ github.token }}
           BACKEND_URL: ${{ inputs.backend_url }}
