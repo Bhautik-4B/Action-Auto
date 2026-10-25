@@ -73,7 +73,7 @@ jobs:
           B="$RUNNER_TEMP/backend"; mkdir -p "$B"
           # Cashfree in TEST mode (sandbox), keys from the repo's secrets; without
           # them the server runs without payments (direct top-up for testing).
-          JWT_SECRET="$(openssl rand -hex 32)" HOST=127.0.0.1 PORT=8080 DB_PATH="$B/app.db" NODE_ENV=production TRUST_PROXY=1 \
+          JWT_SECRET="$(openssl rand -hex 32)" HOST=127.0.0.1 PORT=8080 DB_PATH="$B/app.db" NODE_ENV=production ALLOW_DIRECT_TOPUP=1 TRUST_PROXY=1 \
             PUBLIC_BASE_URL="$BACKEND_URL" CASHFREE_ENV=sandbox CASHFREE_APP_ID="$CF_ID" CASHFREE_SECRET_KEY="$CF_KEY" \
             setsid nohup node src/server.js > "$B/server.log" 2>&1 < /dev/null &
           for i in $(seq 1 60); do curl -sf http://127.0.0.1:8080/healthz >/dev/null && break; sleep 1; done
