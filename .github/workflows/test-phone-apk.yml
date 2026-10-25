@@ -45,6 +45,10 @@ on:
         description: "Only explore the cloner (screens, UI trees, direct opens) instead of the app test"
         type: boolean
         default: false
+      stop_start:
+        description: "Device 1 presses Stop on the app's box mid-run and Start again at once: the new run must show its box and play"
+        type: boolean
+        default: false
       perm_off:
         description: "Device 1 switches the screen permission off mid-run and on again (as Vivo does): the run must pause, then carry on"
         type: boolean
@@ -63,7 +67,7 @@ permissions:
 
 concurrency:
   # One queue per phone shape: a "mixed" run and a normal one run side by side.
-  group: test-phone-apk-${{ inputs.screens || 'same' }}-${{ inputs.android || '11' }}-${{ inputs.network || 'normal' }}-${{ inputs.cloner || 'dualspace' }}-${{ inputs.image || 'google_apis' }}-${{ inputs.probe && 'probe' || 'test' }}-${{ inputs.perm_off && 'permoff' || 'on' }}
+  group: test-phone-apk-${{ inputs.screens || 'same' }}-${{ inputs.android || '11' }}-${{ inputs.network || 'normal' }}-${{ inputs.cloner || 'dualspace' }}-${{ inputs.image || 'google_apis' }}-${{ inputs.probe && 'probe' || 'test' }}-${{ inputs.perm_off && 'permoff' || 'on' }}-${{ inputs.stop_start && 'ss' || 'x' }}
   cancel-in-progress: false
 
 env:
@@ -198,6 +202,7 @@ jobs:
           CLONES: "2"
           PROBE_CLONER: ${{ inputs.probe && '1' || '0' }}
           PERM_OFF: ${{ (inputs.perm_off && matrix.device == 1) && '1' || '0' }}
+          STOP_START: ${{ (inputs.stop_start && matrix.device == 1) && '1' || '0' }}
         with:
           api-level: ${{ (inputs.android == '10' && 29) || (inputs.android == '12' && 31) || (inputs.android == '12L' && 32) || (inputs.android == '13' && 33) || (inputs.android == '14' && 34) || 30 }}
           target: ${{ inputs.image || 'google_apis' }}
