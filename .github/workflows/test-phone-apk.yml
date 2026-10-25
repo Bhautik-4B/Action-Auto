@@ -26,6 +26,11 @@ on:
         description: "Also test the backend: run it on this machine (private/backend), build the APK with BACKEND_URL=http://localhost:8080, sign the app in, then check the backend's database"
         type: boolean
         default: false
+      android:
+        description: "Android version of the emulators (10 uses screen capture, 11+ the accessibility screenshot)"
+        type: choice
+        options: ["11", "10", "12"]
+        default: "11"
   push:
     paths:
       - .github/workflows/test-phone-apk.yml
@@ -35,7 +40,7 @@ permissions:
 
 concurrency:
   # One queue per phone shape: a "mixed" run and a normal one run side by side.
-  group: test-phone-apk-${{ inputs.screens || 'same' }}
+  group: test-phone-apk-${{ inputs.screens || 'same' }}-${{ inputs.android || '11' }}
   cancel-in-progress: false
 
 env:
@@ -159,7 +164,7 @@ jobs:
           WAIT_SEC: "2100"
           CLONES: "2"
         with:
-          api-level: 30
+          api-level: ${{ (inputs.android == '10' && 29) || (inputs.android == '12' && 31) || 30 }}
           target: google_apis
           arch: x86_64
           profile: pixel_4
