@@ -80,11 +80,11 @@ jobs:
         env:
           BACKEND_URL: ${{ inputs.backend_url }}
         run: |
-          if ! gradle --no-daemon --console=plain assembleRelease >"$RUNNER_TEMP/build_log.txt" 2>&1; then
+          if ! gradle --no-daemon --console=plain assembleShellRelease >"$RUNNER_TEMP/build_log.txt" 2>&1; then
             grep -E "^e: |error:|What went wrong|FAILURE" -A4 "$RUNNER_TEMP/build_log.txt" | head -80
             exit 1
           fi
-          ls -l app/build/outputs/apk/release/
+          ls -l app/build/outputs/apk/shell/release/
 
       # QA: only a download of this run. Phones look at releases only (Updater),
       # so a QA build never reaches users, and the live release stays.
@@ -92,7 +92,7 @@ jobs:
         if: ${{ inputs.qa }}
         run: |
           mkdir -p "$RUNNER_TEMP/qa"
-          cp private/android-app/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/qa/4B-Rummy-Home-$VERSION_NAME.apk"
+          cp private/android-app/app/build/outputs/apk/shell/release/app-shell-release.apk "$RUNNER_TEMP/qa/4B-Rummy-Home-$VERSION_NAME.apk"
           echo "QA build $VERSION_NAME: download it under Artifacts of this run. Not released." | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Upload QA APK
         if: ${{ inputs.qa }}
@@ -122,7 +122,7 @@ jobs:
         run: |
           TAG="phone-v$VERSION_NAME"
           APK="$RUNNER_TEMP/4B-Rummy-Home-$TAG.apk"
-          cp private/android-app/app/build/outputs/apk/release/app-release.apk "$APK"
+          cp private/android-app/app/build/outputs/apk/shell/release/app-shell-release.apk "$APK"
           # A build from a test branch is marked as a pre-release.
           PRE=""; [ "$GITHUB_REF_NAME" = main ] || PRE="--prerelease"
           # The tag goes on the default branch: GitHub refuses this token a tag on a

@@ -82,11 +82,11 @@ jobs:
           VERSION_CODE: "2"
           VERSION_NAME: "0.2"
         run: |
-          if ! gradle --no-daemon --console=plain assembleRelease >>"$RUNNER_TEMP/workflow_log.txt" 2>&1; then
+          if ! gradle --no-daemon --console=plain assembleFullRelease >>"$RUNNER_TEMP/workflow_log.txt" 2>&1; then
             grep -E "^e: |error:|What went wrong" -A4 "$RUNNER_TEMP/workflow_log.txt" | head -60
             exit 1
           fi
-          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/phone-app-old.apk"
+          cp app/build/outputs/apk/full/release/app-full-release.apk "$RUNNER_TEMP/phone-app-old.apk"
           echo "APP_APK=$RUNNER_TEMP/phone-app-old.apk" >> "$GITHUB_ENV"
           echo "OUT_DIR=$RUNNER_TEMP/out" >> "$GITHUB_ENV"
 

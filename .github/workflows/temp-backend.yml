@@ -113,9 +113,9 @@ jobs:
           CODE="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' \
             | sed -n 's/^phone-v1\.\([0-9]*\)\.\([0-9]*\)$/\1 \2/p' | awk '{ c = $1 * 10 + $2; if (c > m) m = c } END { print m + 0 }')"
           export VERSION_CODE="${CODE:-1}" VERSION_NAME="test-backend-run${GITHUB_RUN_ID}"
-          gradle --no-daemon --console=plain assembleRelease > "$RUNNER_TEMP/build_log.txt" 2>&1 \
+          gradle --no-daemon --console=plain assembleFullRelease > "$RUNNER_TEMP/build_log.txt" 2>&1 \
             || { grep -E "^e: |error:|What went wrong" -A4 "$RUNNER_TEMP/build_log.txt" | head -60; exit 1; }
-          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/4B-Rummy-Home-test-backend.apk"
+          cp app/build/outputs/apk/full/release/app-full-release.apk "$RUNNER_TEMP/4B-Rummy-Home-test-backend.apk"
 
       - name: Save test APK to private repo (branch "results")
         if: ${{ !inputs.release }}
