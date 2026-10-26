@@ -50,6 +50,22 @@ jobs:
         with:
           gradle-version: "8.14.3"
 
+      # The app's signing key, from GitHub Secrets (never in a repo): written to a
+      # private temp file for the build. Without the secrets the run stops here,
+      # so no APK is ever signed with another key (it could not update the app).
+      - name: Signing key
+        env:
+          KS_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KS_B64" ] || [ -z "$KS_PASS" ]; then
+            echo "::error::Secrets RELEASE_KEYSTORE_B64 and RELEASE_KEYSTORE_PASSWORD are not set (repo Settings > Secrets and variables > Actions)"
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          { echo "RELEASE_KEYSTORE=$RUNNER_TEMP/release.keystore"; echo "RELEASE_KEYSTORE_PASSWORD=$KS_PASS"; echo "REQUIRE_RELEASE_KEY=1"; } >> "$GITHUB_ENV"
+
       - name: Build the app (test build)
         working-directory: private/android-app
         env:
