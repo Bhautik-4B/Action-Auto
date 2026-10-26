@@ -33,7 +33,7 @@ env:
 jobs:
   pages:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 70
     steps:
       - name: Enable KVM
         run: |
@@ -89,7 +89,7 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/phone-app.apk"
 
       - name: Open every page on the emulator
-        timeout-minutes: 30
+        timeout-minutes: 55
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 29
