@@ -1,0 +1,123 @@
+# Builds the bot's logic pack (android-app/app/src/logic: Bot.kt, Screen.kt) and
+# uploads it to the backend, where the canary phones run it at their next Start
+# (node scripts/logic.js all <version> hands it to everyone; an older version
+# there is a rollback). No APK, no install on the phones.
+name: build-logic-pack
+
+on:
+  workflow_dispatch:
+    inputs:
+      backend_url:
+        description: "Backend to upload to (https://...). Its env has LOGIC_UPLOAD_TOKEN; this repo's secret LOGIC_UPLOAD_TOKEN is the same value."
+        required: true
+        default: "https://4brummyhome.synoventum.us.cc"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-logic-pack
+  cancel-in-progress: false
+
+env:
+  PRIVATE_REPO: Bhautik-4B/Game-Auto
+
+jobs:
+  build:
+    name: build logic pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout private repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          path: private
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+
+      # The same compile as the app's (the "full" flavor, with the logic in):
+      # the pack's classes bind to the app's by their real names.
+      - name: Compile
+        working-directory: private/android-app
+        env:
+          BACKEND_URL: ${{ inputs.backend_url }}
+        run: |
+          if ! gradle --no-daemon --console=plain assembleFullRelease >"$RUNNER_TEMP/build_log.txt" 2>&1; then
+            grep -E "^e: |error:|What went wrong|FAILURE" -A4 "$RUNNER_TEMP/build_log.txt" | head -80
+            exit 1
+          fi
+
+      # The signing key is this repo's secret LOGIC_SIGNING_KEY (an RSA private key,
+      # PEM); its public half is in the app (Logic.kt). Without it the pack is
+      # built unsigned, for a look only: phones refuse an unsigned pack.
+      - name: Pack (dex, manifest, signature)
+        id: pack
+        working-directory: private/android-app
+        env:
+          SIGNING_KEY: ${{ secrets.LOGIC_SIGNING_KEY }}
+        run: |
+          set -e
+          if [ -n "$SIGNING_KEY" ]; then printf '%s\n' "$SIGNING_KEY" > "$RUNNER_TEMP/logic-signing.pem"; else echo "No LOGIC_SIGNING_KEY secret: the pack is built UNSIGNED (phones will refuse it)" | tee -a "$GITHUB_STEP_SUMMARY"; fi
+          V=$GITHUB_RUN_NUMBER
+          CLASSES=app/build/tmp/kotlin-classes/fullRelease
+          LOGIC=$CLASSES/app/gameauto/phone/logic
+          ls "$LOGIC"/*.class >/dev/null
+          BT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          PLAT="$ANDROID_HOME/platforms/$(ls "$ANDROID_HOME/platforms" | sort -V | tail -1)/android.jar"
+          STDLIB="$(find ~/.gradle/caches -name 'kotlin-stdlib-2*.jar' | head -1)"
+          OUT="$RUNNER_TEMP/pack"; mkdir -p "$OUT"
+          "$BT/d8" --release --min-api 26 --lib "$PLAT" --classpath "$CLASSES" ${STDLIB:+--classpath "$STDLIB"} --output "$OUT" "$LOGIC"/*.class
+          test -f "$OUT/classes.dex"
+          SHA=$(sha256sum "$OUT/classes.dex" | cut -d' ' -f1)
+          SIG=""; [ -f "$RUNNER_TEMP/logic-signing.pem" ] && SIG=$(printf '%s' "$SHA" | openssl dgst -sha256 -sign "$RUNNER_TEMP/logic-signing.pem" | base64 -w0)
+          API=$(grep -oE 'HOST_API = [0-9]+' app/src/main/java/app/gameauto/phone/Logic.kt | grep -oE '[0-9]+')
+          python3 - "$OUT" "$V" "$SHA" "$SIG" "$API" "$LOGIC" <<'PY'
+          import sys, json, os, base64
+          out, v, sha, sig, api, logic = sys.argv[1:7]
+          classes = sorted('app.gameauto.phone.logic.' + f[:-6] for f in os.listdir(logic) if f.endswith('.class'))
+          m = {'version': int(v), 'sha256': sha, 'sig': sig, 'hostApi': int(api), 'classes': classes}
+          json.dump(m, open(os.path.join(out, 'manifest.json'), 'w'), indent=1)
+          m['dex'] = base64.b64encode(open(os.path.join(out, 'classes.dex'), 'rb').read()).decode()
+          json.dump(m, open(os.path.join(out, 'upload.json'), 'w'))
+          print(f"pack v{v}: {len(classes)} classes, hostApi {api}, sha256 {sha[:12]}…")
+          PY
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Logic pack v$V built ($(stat -c %s "$OUT/classes.dex") bytes, host API $API)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload to the backend
+        env:
+          TOKEN: ${{ secrets.LOGIC_UPLOAD_TOKEN }}
+          BACKEND_URL: ${{ inputs.backend_url }}
+        run: |
+          if ! grep -q '"sig": "[A-Za-z0-9+/=]\{20,\}"' "$RUNNER_TEMP/pack/manifest.json"; then
+            echo "Unsigned pack: not uploaded." | tee -a "$GITHUB_STEP_SUMMARY"; exit 0
+          fi
+          if [ -z "$TOKEN" ]; then
+            echo "No LOGIC_UPLOAD_TOKEN secret in this repo: the pack is only in this run's Artifacts. Add the secret (Settings → Secrets → Actions) with the server's LOGIC_UPLOAD_TOKEN." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          V=${{ steps.pack.outputs.version }}
+          CODE=$(curl -sS -o "$RUNNER_TEMP/upload_answer.json" -w '%{http_code}' -X PUT "${BACKEND_URL%/}/api/v1/app/logic/packs/$V" \
+            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data-binary @"$RUNNER_TEMP/pack/upload.json")
+          cat "$RUNNER_TEMP/upload_answer.json"; echo
+          [ "$CODE" = 200 ] || { echo "upload answered $CODE"; exit 1; }
+          echo "Uploaded: pack v$V is now the canary version on $BACKEND_URL. Everyone: node scripts/logic.js all $V" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: logic-pack-v${{ steps.pack.outputs.version }}
+          path: |
+            ${{ runner.temp }}/pack/classes.dex
+            ${{ runner.temp }}/pack/manifest.json
+          retention-days: 90
