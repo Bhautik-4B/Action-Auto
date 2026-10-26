@@ -57,11 +57,17 @@ jobs:
             exit 1
           fi
 
+      # The signing key is this repo's secret LOGIC_SIGNING_KEY (an RSA private key,
+      # PEM); its public half is in the app (Logic.kt). Without it the pack is
+      # built unsigned, for a look only: phones refuse an unsigned pack.
       - name: Pack (dex, manifest, signature)
         id: pack
         working-directory: private/android-app
+        env:
+          SIGNING_KEY: ${{ secrets.LOGIC_SIGNING_KEY }}
         run: |
           set -e
+          if [ -n "$SIGNING_KEY" ]; then printf '%s\n' "$SIGNING_KEY" > "$RUNNER_TEMP/logic-signing.pem"; else echo "No LOGIC_SIGNING_KEY secret: the pack is built UNSIGNED (phones will refuse it)" | tee -a "$GITHUB_STEP_SUMMARY"; fi
           V=$GITHUB_RUN_NUMBER
           CLASSES=app/build/tmp/kotlin-classes/fullRelease
           LOGIC=$CLASSES/app/gameauto/phone/logic
@@ -73,7 +79,7 @@ jobs:
           "$BT/d8" --release --min-api 26 --lib "$PLAT" --classpath "$CLASSES" ${STDLIB:+--classpath "$STDLIB"} --output "$OUT" "$LOGIC"/*.class
           test -f "$OUT/classes.dex"
           SHA=$(sha256sum "$OUT/classes.dex" | cut -d' ' -f1)
-          SIG=$(printf '%s' "$SHA" | openssl dgst -sha256 -sign logic-signing.pem | base64 -w0)
+          SIG=""; [ -f "$RUNNER_TEMP/logic-signing.pem" ] && SIG=$(printf '%s' "$SHA" | openssl dgst -sha256 -sign "$RUNNER_TEMP/logic-signing.pem" | base64 -w0)
           API=$(grep -oE 'HOST_API = [0-9]+' app/src/main/java/app/gameauto/phone/Logic.kt | grep -oE '[0-9]+')
           python3 - "$OUT" "$V" "$SHA" "$SIG" "$API" "$LOGIC" <<'PY'
           import sys, json, os, base64
@@ -93,6 +99,9 @@ jobs:
           TOKEN: ${{ secrets.LOGIC_UPLOAD_TOKEN }}
           BACKEND_URL: ${{ inputs.backend_url }}
         run: |
+          if ! grep -q '"sig": "[A-Za-z0-9+/=]\{20,\}"' "$RUNNER_TEMP/pack/manifest.json"; then
+            echo "Unsigned pack: not uploaded." | tee -a "$GITHUB_STEP_SUMMARY"; exit 0
+          fi
           if [ -z "$TOKEN" ]; then
             echo "No LOGIC_UPLOAD_TOKEN secret in this repo: the pack is only in this run's Artifacts. Add the secret (Settings → Secrets → Actions) with the server's LOGIC_UPLOAD_TOKEN." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
