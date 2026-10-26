@@ -30,6 +30,10 @@ on:
         description: "With backend: run the shell APK (no logic inside) with a logic pack signed by a test key, uploaded to the local backend and handed to everyone (the way the phones get it)"
         type: boolean
         default: false
+      stop_bet:
+        description: "Press Stop on device 1 right after its first bet, with the result not in yet: the app must read the result, then stop (STOP_BET: PASS)"
+        type: boolean
+        default: false
       pcap:
         description: "Record the emulator's network (what the game downloads: hosts, plain HTTP or TLS, sizes) into the results"
         type: boolean
@@ -75,7 +79,7 @@ permissions:
 
 concurrency:
   # One queue per phone shape: a "mixed" run and a normal one run side by side.
-  group: test-phone-apk-${{ inputs.screens || 'same' }}-${{ inputs.android || '11' }}-${{ inputs.shell_pack && 'pack' || 'nopack' }}-${{ inputs.pcap && 'pcap' || 'nopcap' }}-${{ inputs.network || 'normal' }}-${{ inputs.reinstall && 'reinstall' || 'keep' }}-${{ inputs.image || 'google_apis' }}-${{ inputs.probe || 'no' }}-${{ inputs.perm_off && 'permoff' || 'on' }}-${{ inputs.stop_start && 'ss' || 'x' }}
+  group: test-phone-apk-${{ inputs.screens || 'same' }}-${{ inputs.android || '11' }}-${{ inputs.shell_pack && 'pack' || 'nopack' }}-${{ inputs.pcap && 'pcap' || 'nopcap' }}-${{ inputs.network || 'normal' }}-${{ inputs.reinstall && 'reinstall' || 'keep' }}-${{ inputs.image || 'google_apis' }}-${{ inputs.probe || 'no' }}-${{ inputs.perm_off && 'permoff' || 'on' }}-${{ inputs.stop_start && 'ss' || 'x' }}-${{ inputs.stop_bet && 'sb' || 'x' }}
   cancel-in-progress: false
 
 env:
@@ -232,6 +236,7 @@ jobs:
           PROBE_GAME: ${{ inputs.probe == 'game' && '1' || '0' }}
           PERM_OFF: ${{ (inputs.perm_off && matrix.device == 1) && '1' || '0' }}
           STOP_START: ${{ (inputs.stop_start && matrix.device == 1) && '1' || '0' }}
+          STOP_BET: ${{ (inputs.stop_bet && matrix.device == 1) && '1' || '0' }}
         with:
           api-level: ${{ (inputs.android == '10' && 29) || (inputs.android == '12' && 31) || (inputs.android == '12L' && 32) || (inputs.android == '13' && 33) || (inputs.android == '14' && 34) || (inputs.android == '15' && 35) || 30 }}
           target: ${{ inputs.image || 'google_apis' }}
