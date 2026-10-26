@@ -34,6 +34,11 @@ on:
         description: "Press Stop on device 1 right after its first bet, with the result not in yet: the app must read the result, then stop (STOP_BET: PASS)"
         type: boolean
         default: false
+      cloner:
+        description: "Cloner app for the test: dualspace (Dual Space Pro), clonehub (Clone Hub, com.multibox.clone.hub), multipleapp (Multiple App, com.multipleapp.clonespace; its APK here has no native code, so it may not run), clonemaster"
+        type: choice
+        options: [dualspace, clonehub, multipleapp, clonemaster]
+        default: dualspace
       pcap:
         description: "Record the emulator's network (what the game downloads: hosts, plain HTTP or TLS, sizes) into the results"
         type: boolean
@@ -79,7 +84,7 @@ permissions:
 
 concurrency:
   # One queue per phone shape: a "mixed" run and a normal one run side by side.
-  group: test-phone-apk-${{ inputs.screens || 'same' }}-${{ inputs.android || '11' }}-${{ inputs.shell_pack && 'pack' || 'nopack' }}-${{ inputs.pcap && 'pcap' || 'nopcap' }}-${{ inputs.network || 'normal' }}-${{ inputs.reinstall && 'reinstall' || 'keep' }}-${{ inputs.image || 'google_apis' }}-${{ inputs.probe || 'no' }}-${{ inputs.perm_off && 'permoff' || 'on' }}-${{ inputs.stop_start && 'ss' || 'x' }}-${{ inputs.stop_bet && 'sb' || 'x' }}
+  group: test-phone-apk-${{ inputs.screens || 'same' }}-${{ inputs.android || '11' }}-${{ inputs.shell_pack && 'pack' || 'nopack' }}-${{ inputs.pcap && 'pcap' || 'nopcap' }}-${{ inputs.network || 'normal' }}-${{ inputs.reinstall && 'reinstall' || 'keep' }}-${{ inputs.image || 'google_apis' }}-${{ inputs.probe || 'no' }}-${{ inputs.perm_off && 'permoff' || 'on' }}-${{ inputs.stop_start && 'ss' || 'x' }}-${{ inputs.stop_bet && 'sb' || 'x' }}-${{ inputs.cloner || 'dualspace' }}
   cancel-in-progress: false
 
 env:
@@ -200,7 +205,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/apk"
           gh release download --repo "$PRIVATE_REPO" --pattern '*.apk' --dir "$RUNNER_TEMP/apk" 2>/dev/null \
             || cp private/apk/*.apk "$RUNNER_TEMP/apk/" 2>/dev/null || { echo "::error::No APK found"; exit 1; }
-          APK="$(ls "$RUNNER_TEMP"/apk/*.apk | grep -vE '/(com\.ludashi\.dualspace|net\.typeblog\.shelter|co\.keeptop\.multi\.space|com\.dualspacepro\.multispace)_' | head -1)"
+          # The game is base.apk; every cloner APK of the release is left out.
+          APK="$RUNNER_TEMP/apk/base.apk"
+          [ -f "$APK" ] || APK="$(ls "$RUNNER_TEMP"/apk/*.apk | grep -vE '/(com\.ludashi\.dualspace|net\.typeblog\.shelter|co\.keeptop\.multi\.space|com\.dualspacepro\.multispace|com\.dualspace\.multispace|com\.cmaster|com\.multibox|com\.multipleapp|CLONE-HUB|MULTIPLE-APP)' | head -1)"
           echo "GAME_APK=$APK" >> "$GITHUB_ENV"
           echo "OUT_DIR=$RUNNER_TEMP/out" >> "$GITHUB_ENV"
           # The cloner app from release APK, as in Phase 1 (Multi Space, else Dual
@@ -209,7 +216,16 @@ jobs:
           # Dual Space Pro, from this repo's release "Dual" (uploaded by the owner).
           curl -fsSL -o "$RUNNER_TEMP/apk/com.dualspacepro.multispace_dual.apk" \
             "https://github.com/$GITHUB_REPOSITORY/releases/download/Dual/base.apk" || rm -f "$RUNNER_TEMP/apk/com.dualspacepro.multispace_dual.apk"
-          for C in co.keeptop.multi.space com.dualspacepro.multispace com.ludashi.dualspace; do
+          # The two of Clone Master's kind (release "APK" of the private repo, uploaded by the owner).
+          [ -f "$RUNNER_TEMP/apk/CLONE-HUB.apk" ] && mv "$RUNNER_TEMP/apk/CLONE-HUB.apk" "$RUNNER_TEMP/apk/com.multibox.clone.hub_1.apk"
+          [ -f "$RUNNER_TEMP/apk/MULTIPLE-APP.apk" ] && mv "$RUNNER_TEMP/apk/MULTIPLE-APP.apk" "$RUNNER_TEMP/apk/com.multipleapp.clonespace_1.apk"
+          case "${{ inputs.cloner || 'dualspace' }}" in
+            clonehub) ORDER="com.multibox.clone.hub" ;;
+            multipleapp) ORDER="com.multipleapp.clonespace" ;;
+            clonemaster) ORDER="com.cmaster.cloner" ;;
+            *) ORDER="co.keeptop.multi.space com.dualspacepro.multispace com.ludashi.dualspace" ;;
+          esac
+          for C in $ORDER; do
             F="$(ls "$RUNNER_TEMP"/apk/${C}_*.apk 2>/dev/null | head -1)"
             [ -n "$F" ] && { echo "CLONER_APK=$F" >> "$GITHUB_ENV"; echo "CLONER_PKG=$C" >> "$GITHUB_ENV"; echo "Cloner: $(basename "$F")"; break; }
           done
