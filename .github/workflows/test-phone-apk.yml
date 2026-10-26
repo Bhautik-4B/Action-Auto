@@ -46,7 +46,7 @@ on:
       android:
         description: "Android version of the emulators (10 uses screen capture, 11+ the accessibility screenshot)"
         type: choice
-        options: ["11", "10", "12", "12L", "13", "14", "15"]
+        options: ["11", "10", "9", "8.1", "12", "12L", "13", "14", "15"]
         default: "11"
       image:
         description: "Emulator image: google_apis, or google_apis_playstore (newer Android: the Play image may carry the ARM translation the game needs)"
@@ -254,7 +254,7 @@ jobs:
           STOP_START: ${{ (inputs.stop_start && matrix.device == 1) && '1' || '0' }}
           STOP_BET: ${{ (inputs.stop_bet && matrix.device == 1) && '1' || '0' }}
         with:
-          api-level: ${{ (inputs.android == '10' && 29) || (inputs.android == '12' && 31) || (inputs.android == '12L' && 32) || (inputs.android == '13' && 33) || (inputs.android == '14' && 34) || (inputs.android == '15' && 35) || 30 }}
+          api-level: ${{ (inputs.android == '10' && 29) || (inputs.android == '9' && 28) || (inputs.android == '8.1' && 27) || (inputs.android == '12' && 31) || (inputs.android == '12L' && 32) || (inputs.android == '13' && 33) || (inputs.android == '14' && 34) || (inputs.android == '15' && 35) || 30 }}
           target: ${{ inputs.image || 'google_apis' }}
           arch: x86_64
           profile: pixel_4
