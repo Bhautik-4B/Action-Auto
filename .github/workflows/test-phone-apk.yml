@@ -26,6 +26,10 @@ on:
         description: "Also test the backend: run it on this machine (private/backend), build the APK with BACKEND_URL=http://localhost:8080, sign the app in, then check the backend's database"
         type: boolean
         default: false
+      shell_pack:
+        description: "With backend: run the shell APK (no logic inside) with a logic pack signed by a test key, uploaded to the local backend and handed to everyone (the way the phones get it)"
+        type: boolean
+        default: false
       android:
         description: "Android version of the emulators (10 uses screen capture, 11+ the accessibility screenshot)"
         type: choice
@@ -67,7 +71,7 @@ permissions:
 
 concurrency:
   # One queue per phone shape: a "mixed" run and a normal one run side by side.
-  group: test-phone-apk-${{ inputs.screens || 'same' }}-${{ inputs.android || '11' }}-${{ inputs.network || 'normal' }}-${{ inputs.reinstall && 'reinstall' || 'keep' }}-${{ inputs.image || 'google_apis' }}-${{ inputs.probe || 'no' }}-${{ inputs.perm_off && 'permoff' || 'on' }}-${{ inputs.stop_start && 'ss' || 'x' }}
+  group: test-phone-apk-${{ inputs.screens || 'same' }}-${{ inputs.android || '11' }}-${{ inputs.shell_pack && 'pack' || 'nopack' }}-${{ inputs.network || 'normal' }}-${{ inputs.reinstall && 'reinstall' || 'keep' }}-${{ inputs.image || 'google_apis' }}-${{ inputs.probe || 'no' }}-${{ inputs.perm_off && 'permoff' || 'on' }}-${{ inputs.stop_start && 'ss' || 'x' }}
   cancel-in-progress: false
 
 env:
@@ -132,6 +136,7 @@ jobs:
           npm ci --no-audit --no-fund
           B="$RUNNER_TEMP/backend"; mkdir -p "$B"
           JWT_SECRET="$(openssl rand -hex 32)" HOST=127.0.0.1 PORT=8080 DB_PATH="$B/app.db" NODE_ENV=production ALLOW_DIRECT_TOPUP=1 \
+            LOGIC_UPLOAD_TOKEN="test-upload-token-0123456789" \
             setsid nohup node src/server.js > "$B/server.log" 2>&1 < /dev/null &
           for i in $(seq 1 60); do curl -sf http://127.0.0.1:8080/healthz && break; sleep 1; done
           curl -sf http://127.0.0.1:8080/healthz || { echo "::error::Backend did not start"; tail -50 "$B/server.log"; exit 1; }
@@ -152,6 +157,32 @@ jobs:
           fi
           cp app/build/outputs/apk/full/release/app-full-release.apk "$RUNNER_TEMP/phone-app.apk"
           echo "APP_APK=$RUNNER_TEMP/phone-app.apk" >> "$GITHUB_ENV"
+
+      # shell_pack: the logic pack from the full compile above, signed with a key
+      # made here; the shell APK is built with that key's public half, the pack
+      # is uploaded to the local backend and handed to everyone. The run then
+      # uses the shell APK, which must download and load the pack (its log:
+      # "Bot logic: v1").
+      - name: Shell APK + logic pack
+        if: inputs.backend && inputs.shell_pack
+        working-directory: private/android-app
+        env:
+          APP_ABIS: x86_64,arm64-v8a
+        run: |
+          set -e
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$RUNNER_TEMP/test-logic-key.pem" 2>/dev/null
+          export LOGIC_PUBLIC_KEY="$(openssl pkey -in "$RUNNER_TEMP/test-logic-key.pem" -pubout -outform DER 2>/dev/null | base64 -w0)"
+          if ! gradle --no-daemon --console=plain assembleShellRelease >>"$RUNNER_TEMP/workflow_log.txt" 2>&1; then
+            grep -E "^e: |error:|What went wrong|FAILED" -A4 "$RUNNER_TEMP/workflow_log.txt" | head -60
+            exit 1
+          fi
+          ../scripts/make_logic_pack.sh . "$RUNNER_TEMP/pack" 1 "$RUNNER_TEMP/test-logic-key.pem" | tee -a "$GITHUB_STEP_SUMMARY"
+          CODE=$(curl -sS -o "$RUNNER_TEMP/pack/answer.json" -w '%{http_code}' -X PUT http://127.0.0.1:8080/api/v1/app/logic/packs/1 \
+            -H "Authorization: Bearer test-upload-token-0123456789" -H "Content-Type: application/json" --data-binary @"$RUNNER_TEMP/pack/upload.json")
+          [ "$CODE" = 200 ] || { echo "pack upload answered $CODE: $(cat "$RUNNER_TEMP/pack/answer.json")"; exit 1; }
+          (cd ../backend && DB_PATH="$BACKEND_DB" JWT_SECRET=x NODE_ENV=test node scripts/logic.js all 1) | tee -a "$GITHUB_STEP_SUMMARY"
+          cp app/build/outputs/apk/shell/release/app-shell-release.apk "$RUNNER_TEMP/phone-app.apk"
+          echo "The run uses the SHELL APK with logic pack v1 from the local backend" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Get game APK
         env:
