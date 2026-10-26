@@ -101,6 +101,18 @@ jobs:
           name: 4B-Rummy-Home-${{ env.VERSION_NAME }}
           path: ${{ runner.temp }}/qa/*.apk
           retention-days: 30
+      # The same QA APK as a direct download link: a pre-release tagged qa-v...
+      # Phones and the server only look at phone-v tags, so no phone ever sees it.
+      - name: Publish QA APK as a direct link
+        if: ${{ inputs.qa }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="qa-v$VERSION_NAME"
+          gh release create "$TAG" "$RUNNER_TEMP"/qa/*.apk --repo "$GITHUB_REPOSITORY" --prerelease \
+            --title "QA $VERSION_NAME (test only, not for users)" \
+            --notes "Test build from branch $GITHUB_REF_NAME. Phones do not update to it." || true
+          echo "Direct link: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/4B-Rummy-Home-$VERSION_NAME.apk" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Publish release
         if: ${{ !inputs.qa }}
