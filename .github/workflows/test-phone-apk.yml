@@ -30,6 +30,10 @@ on:
         description: "With backend: run the shell APK (no logic inside) with a logic pack signed by a test key, uploaded to the local backend and handed to everyone (the way the phones get it)"
         type: boolean
         default: false
+      pcap:
+        description: "Record the emulator's network (what the game downloads: hosts, plain HTTP or TLS, sizes) into the results"
+        type: boolean
+        default: false
       android:
         description: "Android version of the emulators (10 uses screen capture, 11+ the accessibility screenshot)"
         type: choice
@@ -71,7 +75,7 @@ permissions:
 
 concurrency:
   # One queue per phone shape: a "mixed" run and a normal one run side by side.
-  group: test-phone-apk-${{ inputs.screens || 'same' }}-${{ inputs.android || '11' }}-${{ inputs.shell_pack && 'pack' || 'nopack' }}-${{ inputs.network || 'normal' }}-${{ inputs.reinstall && 'reinstall' || 'keep' }}-${{ inputs.image || 'google_apis' }}-${{ inputs.probe || 'no' }}-${{ inputs.perm_off && 'permoff' || 'on' }}-${{ inputs.stop_start && 'ss' || 'x' }}
+  group: test-phone-apk-${{ inputs.screens || 'same' }}-${{ inputs.android || '11' }}-${{ inputs.shell_pack && 'pack' || 'nopack' }}-${{ inputs.pcap && 'pcap' || 'nopcap' }}-${{ inputs.network || 'normal' }}-${{ inputs.reinstall && 'reinstall' || 'keep' }}-${{ inputs.image || 'google_apis' }}-${{ inputs.probe || 'no' }}-${{ inputs.perm_off && 'permoff' || 'on' }}-${{ inputs.stop_start && 'ss' || 'x' }}
   cancel-in-progress: false
 
 env:
@@ -237,11 +241,31 @@ jobs:
           ram-size: 6144M
           disk-size: 8G
           force-avd-creation: false
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save ${{ inputs.pcap && format('-tcpdump {0}/net.pcap', runner.temp) || '' }}
           disable-animations: true
           # The app's step lines are shown here with guest IDs hidden (public log).
           script: |
             bash -o pipefail -c 'bash private/scripts/test_phone_app.sh "$GAME_APK" "$APP_APK" "$OUT_DIR" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8} [AP]M\] " | grep --line-buffered -vE "TAP |step_[0-9]+" | sed -u -E "s/(Guest ID: |guest|expected guest |but got |guest_id.: .)[0-9]+/\1***/g"; true; }'
+
+      # pcap: what went over the network, by host: plain HTTP (its requests, cacheable
+      # on the phone) or TLS (its server name), and how many bytes. Into the results.
+      - name: Network capture summary
+        if: always() && inputs.pcap
+        run: |
+          sudo apt-get install -y -qq tshark >/dev/null 2>&1 || true
+          P="$RUNNER_TEMP/net.pcap"; D="${OUT_DIR:-$RUNNER_TEMP/out}"; mkdir -p "$D"
+          [ -s "$P" ] || { echo "no capture" | tee "$D/network.txt"; exit 0; }
+          {
+            echo "### Bytes by server (TLS server name or HTTP host)"
+            tshark -r "$P" -Y "tls.handshake.extensions_server_name" -T fields -e tls.handshake.extensions_server_name -e ip.dst 2>/dev/null | sort -u | head -60
+            echo; echo "### Plain HTTP requests (host, URL, answer size)"
+            tshark -r "$P" -Y "http.request" -T fields -e http.host -e http.request.uri 2>/dev/null | sort | uniq -c | sort -rn | head -80
+            echo; echo "### HTTP answers (content length by host)"
+            tshark -r "$P" -Y "http.response" -T fields -e http.response_for.uri -e http.content_length 2>/dev/null | sort | uniq -c | sort -rn | head -40
+            echo; echo "### Traffic by destination (bytes)"
+            tshark -r "$P" -q -z conv,ip 2>/dev/null | tail -n +6 | head -40
+          } > "$D/network.txt" 2>&1
+          { echo "Network capture (device $DEVICE):"; echo '```'; head -120 "$D/network.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Backend server log
         if: always() && inputs.backend
