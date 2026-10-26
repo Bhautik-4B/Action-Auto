@@ -5,9 +5,17 @@ name: Phone app pages (screenshots)
 # screenshots (normal, large text, small screen): scripts/ui_tour.sh. Nothing
 # is played and nothing is released. The screenshots go to branch "results" of
 # the private repo, folder runs/<time>-uitour-run<id>.
+# backend=true: the backend (private/backend) runs on this machine and the
+# test build talks to it (http://localhost:8080 through adb reverse), so the
+# Wallet page shows My wallet with a few test top-ups. Test data only.
 
 on:
   workflow_dispatch:
+    inputs:
+      backend:
+        description: "Run the backend here so Wallet shows My wallet (test data only)"
+        type: boolean
+        default: true
   push:
     paths:
       - .github/workflows/ui-phone-apk.yml
@@ -49,6 +57,24 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.14.3"
+
+      - uses: actions/setup-node@v4
+        if: inputs.backend
+        with:
+          node-version: "22"
+
+      - name: Start backend (test data only)
+        if: inputs.backend
+        working-directory: private/backend
+        run: |
+          npm ci --no-audit --no-fund >/dev/null
+          B="$RUNNER_TEMP/backend"; mkdir -p "$B"
+          JWT_SECRET="$(openssl rand -hex 32)" HOST=127.0.0.1 PORT=8080 DB_PATH="$B/app.db" NODE_ENV=production ALLOW_DIRECT_TOPUP=1 \
+            setsid nohup node src/server.js > "$B/server.log" 2>&1 < /dev/null &
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8080/healthz && break; sleep 1; done
+          curl -sf http://127.0.0.1:8080/healthz || { echo "::error::Backend did not start"; tail -50 "$B/server.log"; exit 1; }
+          echo "BACKEND_URL=http://localhost:8080" >> "$GITHUB_ENV"
+          echo "UI_BACKEND=1" >> "$GITHUB_ENV"
 
       - name: Build the app (test build)
         working-directory: private/android-app
