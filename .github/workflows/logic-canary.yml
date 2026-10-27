@@ -1,0 +1,49 @@
+name: logic canary users
+
+# Adds or removes a user's phones from the canary logic pack (PUT /app/logic/state
+# canaryAdd / canaryRemove, with the LOGIC_UPLOAD_TOKEN secret). Who: canary.json
+# in the private repository (branch board): {"add": "<email or name>"} or
+# {"remove": "..."}. This repository is public: no name is printed here.
+on:
+  workflow_dispatch:
+    inputs:
+      backend_url:
+        description: "Backend (https://...)"
+        required: true
+        default: "https://4brummyhome.synoventum.us.cc"
+
+permissions:
+  contents: read
+
+env:
+  PRIVATE_REPO: Bhautik-4B/Game-Auto
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Change the canary users
+        env:
+          TOKEN: ${{ secrets.LOGIC_UPLOAD_TOKEN }}
+          REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          BACKEND_URL: ${{ inputs.backend_url }}
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch board "https://x-access-token:${REPO_TOKEN}@github.com/${PRIVATE_REPO}.git" "$RUNNER_TEMP/b"
+          python3 - <<'PY'
+          import json, os, sys, urllib.request, urllib.error
+          req = json.load(open(os.environ["RUNNER_TEMP"] + "/b/canary.json"))
+          body = {}
+          if req.get("add"): body["canaryAdd"] = req["add"]
+          if req.get("remove"): body["canaryRemove"] = req["remove"]
+          if not body: print("canary.json asks for nothing"); sys.exit(1)
+          r = urllib.request.Request(os.environ["BACKEND_URL"].rstrip("/") + "/api/v1/app/logic/state", method="PUT",
+              data=json.dumps(body).encode(), headers={"Authorization": "Bearer " + os.environ["TOKEN"], "Content-Type": "application/json"})
+          try:
+              with urllib.request.urlopen(r, timeout=30) as resp:
+                  d = json.load(resp)
+          except urllib.error.HTTPError as e:
+              d = json.loads(e.read() or b"{}"); print("Refused:", e.code, d.get("error")); sys.exit(1)
+          u = d.get("user") or {}
+          print(f"OK: user id {u.get('id')} {'is now' if u.get('canary') else 'is no longer'} a canary; canary v{d['canary'].get('version')} for {len(d['canary'].get('users', []))} user(s); everyone v{d.get('all')}")
+          PY
