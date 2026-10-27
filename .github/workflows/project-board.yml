@@ -8,6 +8,11 @@ on:
   schedule:
     - cron: "17 */3 * * *"   # every 3 hours
   workflow_dispatch:
+    inputs:
+      add:
+        description: "Also add the cards in todo.json (private repository, branch board) as Todo items"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -26,6 +31,56 @@ jobs:
     name: copy the board
     runs-on: ubuntu-latest
     steps:
+      - name: Add the cards from todo.json
+        if: ${{ inputs.add }}
+        env:
+          TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+          REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          ASSIGNEE: Bhautik-4B
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch board "https://x-access-token:${REPO_TOKEN}@github.com/${PRIVATE_REPO}.git" "$RUNNER_TEMP/src"
+          cat > "$RUNNER_TEMP/add.py" <<'PY'
+          import json, os, sys, urllib.request
+          token = os.environ["TOKEN"]; owner = os.environ["BOARD_OWNER"]; number = int(os.environ["BOARD_NUMBER"])
+          def gql(q, v):
+              req = urllib.request.Request("https://api.github.com/graphql", data=json.dumps({"query": q, "variables": v}).encode(),
+                  headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.load(r)
+          d = gql("""query($login: String!, $number: Int!, $who: String!) {
+            user(login: $login) { projectV2(number: $number) { id
+              fields(first: 50) { nodes { ... on ProjectV2SingleSelectField { id name options { id name } } } }
+              items(first: 100) { nodes { content { ... on DraftIssue { title } ... on Issue { title } ... on PullRequest { title } } } } } }
+            who: user(login: $who) { id } }""", {"login": owner, "number": number, "who": os.environ["ASSIGNEE"]})
+          if d.get("errors"): print("Read errors:", [e.get("type") for e in d["errors"]]); sys.exit(1)
+          proj = d["data"]["user"]["projectV2"]; who = (d["data"].get("who") or {}).get("id")
+          status = next((f for f in proj["fields"]["nodes"] if f and f.get("name", "").lower() == "status"), None)
+          todo = next((o for o in (status or {}).get("options", []) if o["name"].lower().replace(" ", "") == "todo"), None)
+          print("Status field:", bool(status), "Todo option:", bool(todo), "assignee found:", bool(who))
+          have = {(n.get("content") or {}).get("title") for n in proj["items"]["nodes"]}
+          cards = json.load(open(os.environ["RUNNER_TEMP"] + "/src/todo.json"))
+          added = skipped = noassign = 0
+          M = """mutation($p: ID!, $t: String!, $b: String, $a: [ID!]) {
+            addProjectV2DraftIssue(input: {projectId: $p, title: $t, body: $b, assigneeIds: $a}) { projectItem { id } } }"""
+          for c in cards:
+              if c["title"] in have: skipped += 1; continue
+              r = gql(M, {"p": proj["id"], "t": c["title"], "b": c["body"], "a": [who] if who else []})
+              if r.get("errors") and who:
+                  noassign += 1
+                  r = gql(M, {"p": proj["id"], "t": c["title"], "b": c["body"], "a": []})
+              if r.get("errors"): print("Add errors:", [e.get("type") for e in r["errors"]]); sys.exit(1)
+              item = r["data"]["addProjectV2DraftIssue"]["projectItem"]["id"]
+              if status and todo:
+                  u = gql("""mutation($p: ID!, $i: ID!, $f: ID!, $o: String!) {
+                    updateProjectV2ItemFieldValue(input: {projectId: $p, itemId: $i, fieldId: $f, value: {singleSelectOptionId: $o}}) { projectV2Item { id } } }""",
+                    {"p": proj["id"], "i": item, "f": status["id"], "o": todo["id"]})
+                  if u.get("errors"): print("Status errors:", [e.get("type") for e in u["errors"]]); sys.exit(1)
+              added += 1
+          print(f"Cards added: {added}, already there: {skipped}, added without assignee: {noassign}")
+          PY
+          python3 "$RUNNER_TEMP/add.py"
+
       - name: Read the board
         env:
           TOKEN: ${{ secrets.PROJECTS_TOKEN }}
