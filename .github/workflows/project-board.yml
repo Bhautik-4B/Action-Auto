@@ -14,7 +14,7 @@ on:
         type: boolean
         default: false
       convert:
-        description: "Turn every draft card into an issue of the private repository (assigned to Bhautik-4B)"
+        description: "Turn every draft card into an issue of 4BornGithub/4B-Rummy-Home (assigned to Bhautik-4B)"
         type: boolean
         default: false
 
@@ -29,6 +29,7 @@ env:
   PRIVATE_REPO: Bhautik-4B/Game-Auto
   BOARD_OWNER: 4BornGithub
   BOARD_NUMBER: "31"
+  ISSUE_REPO: 4BornGithub/4B-Rummy-Home   # where the cards become issues
 
 jobs:
   copy:
@@ -95,7 +96,7 @@ jobs:
           cat > "$RUNNER_TEMP/convert.py" <<'PY'
           import json, os, sys, urllib.request
           token = os.environ["TOKEN"]; owner = os.environ["BOARD_OWNER"]; number = int(os.environ["BOARD_NUMBER"])
-          ro, rn = os.environ["PRIVATE_REPO"].split("/")
+          ro, rn = os.environ["ISSUE_REPO"].split("/")
           def gql(q, v):
               req = urllib.request.Request("https://api.github.com/graphql", data=json.dumps({"query": q, "variables": v}).encode(),
                   headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
@@ -107,7 +108,7 @@ jobs:
             who: user(login: $who) { id } }""", {"login": owner, "number": number, "ro": ro, "rn": rn, "who": os.environ["ASSIGNEE"]})
           if d.get("errors"): print("Read errors:", [e.get("type") for e in d["errors"]]); sys.exit(1)
           repo = (d["data"].get("repository") or {}).get("id"); who = (d["data"].get("who") or {}).get("id")
-          if not repo: print("The private repository is not reachable with PROJECTS_TOKEN"); sys.exit(1)
+          if not repo: print("The issue repository is not reachable with PROJECTS_TOKEN"); sys.exit(1)
           drafts = [n["id"] for n in d["data"]["user"]["projectV2"]["items"]["nodes"] if n["type"] == "DRAFT_ISSUE"]
           done = 0
           for item in drafts:
