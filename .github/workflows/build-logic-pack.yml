@@ -11,6 +11,10 @@ on:
         description: "Backend to upload to (https://...). Its env has LOGIC_UPLOAD_TOKEN; this repo's secret LOGIC_UPLOAD_TOKEN is the same value."
         required: true
         default: "https://4brummyhome.synoventum.us.cc"
+      all:
+        description: "After the upload, everyone runs this pack (not only the canary phones)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -91,6 +95,13 @@ jobs:
             -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data-binary @"$RUNNER_TEMP/pack/upload.json")
           cat "$RUNNER_TEMP/upload_answer.json"; echo
           [ "$CODE" = 200 ] || { echo "upload answered $CODE"; exit 1; }
+          if [ "${{ inputs.all }}" = true ]; then
+            CODE=$(curl -sS -o "$RUNNER_TEMP/state_answer.json" -w '%{http_code}' -X PUT "${BACKEND_URL%/}/api/v1/app/logic/state" \
+              -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data "{\"all\": $V}")
+            cat "$RUNNER_TEMP/state_answer.json"; echo
+            [ "$CODE" = 200 ] || { echo "state answered $CODE"; exit 1; }
+            echo "Everyone runs pack v$V now." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
           echo "Uploaded: pack v$V is now the canary version on $BACKEND_URL. Everyone: node scripts/logic.js all $V" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Keep the pack
