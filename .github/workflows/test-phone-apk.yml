@@ -35,9 +35,9 @@ on:
         type: boolean
         default: false
       cloner:
-        description: "Cloner app for the test: dualspace (Dual Space Pro), clonehub (Clone Hub, com.multibox.clone.hub), multipleapp (Multiple App, com.multipleapp.clonespace; its APK here has no native code, so it may not run), clonemaster"
+        description: "Cloner app for the test: dualspace (Dual Space Pro), clonehub (Clone Hub, com.multibox.clone.hub), multipleapp (Multiple App, com.multipleapp.clonespace; its APK here has no native code, so it may not run), clonemaster, multispace (Multi Space 1.1.3, com.dualspace.multispace.android)"
         type: choice
-        options: [dualspace, clonehub, multipleapp, clonemaster]
+        options: [dualspace, clonehub, multipleapp, clonemaster, multispace]
         default: dualspace
       pcap:
         description: "Record the emulator's network (what the game downloads: hosts, plain HTTP or TLS, sizes) into the results"
@@ -223,6 +223,7 @@ jobs:
             clonehub) ORDER="com.multibox.clone.hub" ;;
             multipleapp) ORDER="com.multipleapp.clonespace" ;;
             clonemaster) ORDER="com.cmaster.cloner" ;;
+            multispace) ORDER="com.dualspace.multispace.android" ;;
             *) ORDER="co.keeptop.multi.space com.dualspacepro.multispace com.ludashi.dualspace" ;;
           esac
           for C in $ORDER; do
