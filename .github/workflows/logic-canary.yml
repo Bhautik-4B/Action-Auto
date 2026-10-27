@@ -30,20 +30,16 @@ jobs:
         run: |
           set -euo pipefail
           git clone -q --depth 1 --branch board "https://x-access-token:${REPO_TOKEN}@github.com/${PRIVATE_REPO}.git" "$RUNNER_TEMP/b"
-          python3 - <<'PY'
-          import json, os, sys, urllib.request, urllib.error
-          req = json.load(open(os.environ["RUNNER_TEMP"] + "/b/canary.json"))
-          body = {}
-          if req.get("add"): body["canaryAdd"] = req["add"]
-          if req.get("remove"): body["canaryRemove"] = req["remove"]
-          if not body: print("canary.json asks for nothing"); sys.exit(1)
-          r = urllib.request.Request(os.environ["BACKEND_URL"].rstrip("/") + "/api/v1/app/logic/state", method="PUT",
-              data=json.dumps(body).encode(), headers={"Authorization": "Bearer " + os.environ["TOKEN"], "Content-Type": "application/json"})
-          try:
-              with urllib.request.urlopen(r, timeout=30) as resp:
-                  d = json.load(resp)
-          except urllib.error.HTTPError as e:
-              d = json.loads(e.read() or b"{}"); print("Refused:", e.code, d.get("error")); sys.exit(1)
+          BODY=$(python3 -c "import json,os;r=json.load(open(os.environ['RUNNER_TEMP']+'/b/canary.json'));b={};r.get('add') and b.update(canaryAdd=r['add']);r.get('remove') and b.update(canaryRemove=r['remove']);print(json.dumps(b))")
+          [ "$BODY" != "{}" ] || { echo "canary.json asks for nothing"; exit 1; }
+          CODE=$(curl -sS -o "$RUNNER_TEMP/out.json" -w '%{http_code}' -X PUT "${BACKEND_URL%/}/api/v1/app/logic/state" \
+            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data "$BODY")
+          python3 - "$CODE" "$RUNNER_TEMP/out.json" <<'PY'
+          import json, sys
+          code, path = sys.argv[1], sys.argv[2]
+          try: d = json.load(open(path))
+          except Exception: print("HTTP", code, "(not JSON)"); sys.exit(1)
+          if code != "200": print("Refused: HTTP", code, d.get("error")); sys.exit(1)
           u = d.get("user") or {}
           print(f"OK: user id {u.get('id')} {'is now' if u.get('canary') else 'is no longer'} a canary; canary v{d['canary'].get('version')} for {len(d['canary'].get('users', []))} user(s); everyone v{d.get('all')}")
           PY
