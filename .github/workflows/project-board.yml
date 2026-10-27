@@ -13,6 +13,10 @@ on:
         description: "Also add the cards in todo.json (private repository, branch board) as Todo items"
         type: boolean
         default: false
+      status:
+        description: "Set each card's Status from status.json (private repository, branch board): title -> progress / todo / done"
+        type: boolean
+        default: false
       convert:
         description: "Turn every draft card into an issue of 4BornGithub/4B-Rummy-Home (assigned to Bhautik-4B)"
         type: boolean
@@ -124,6 +128,55 @@ jobs:
           print(f"Draft cards turned into issues: {done} of {len(drafts)}")
           PY
           python3 "$RUNNER_TEMP/convert.py"
+
+      - name: Set the cards' status
+        if: ${{ inputs.status }}
+        env:
+          TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+          REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/st" && git clone -q --depth 1 --branch board "https://x-access-token:${REPO_TOKEN}@github.com/${PRIVATE_REPO}.git" "$RUNNER_TEMP/st"
+          cat > "$RUNNER_TEMP/status.py" <<'PY'
+          import json, os, sys, urllib.request
+          token = os.environ["TOKEN"]; owner = os.environ["BOARD_OWNER"]; number = int(os.environ["BOARD_NUMBER"])
+          def gql(q, v):
+              req = urllib.request.Request("https://api.github.com/graphql", data=json.dumps({"query": q, "variables": v}).encode(),
+                  headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.load(r)
+          d = gql("""query($login: String!, $number: Int!) { user(login: $login) { projectV2(number: $number) { id
+              fields(first: 50) { nodes { ... on ProjectV2SingleSelectField { id name options { id name } } } }
+              items(first: 100) { nodes { id content { ... on DraftIssue { title } ... on Issue { title } ... on PullRequest { title } } } } } } }""",
+              {"login": owner, "number": number})
+          if d.get("errors"): print("Read errors:", [e.get("type") for e in d["errors"]]); sys.exit(1)
+          proj = d["data"]["user"]["projectV2"]
+          status = next((f for f in proj["fields"]["nodes"] if f and f.get("name", "").lower() == "status"), None)
+          if not status: print("No Status field"); sys.exit(1)
+          opts = status["options"]
+          print("Status options:", [o["name"] for o in opts])
+          def pick(word):
+              w = word.lower().replace("-", "").replace(" ", "")
+              keys = {"todo": ["todo", "backlog"], "progress": ["progress", "doing"], "done": ["done", "complete", "closed"]}.get(w, [w])
+              for k in keys:
+                  for o in opts:
+                      if k in o["name"].lower().replace("-", "").replace(" ", ""): return o
+              return None
+          want = json.load(open(os.environ["RUNNER_TEMP"] + "/st/status.json"))
+          done = missing = 0
+          for n in proj["items"]["nodes"]:
+              t = (n.get("content") or {}).get("title")
+              if t not in want: continue
+              o = pick(want[t])
+              if not o: missing += 1; continue
+              u = gql("""mutation($p: ID!, $i: ID!, $f: ID!, $o: String!) {
+                updateProjectV2ItemFieldValue(input: {projectId: $p, itemId: $i, fieldId: $f, value: {singleSelectOptionId: $o}}) { projectV2Item { id } } }""",
+                {"p": proj["id"], "i": n["id"], "f": status["id"], "o": o["id"]})
+              if u.get("errors"): print("Status errors:", [e.get("type") for e in u["errors"]]); sys.exit(1)
+              done += 1
+          print(f"Statuses set: {done}; no matching option: {missing}")
+          PY
+          python3 "$RUNNER_TEMP/status.py"
 
       - name: Read the board
         env:
