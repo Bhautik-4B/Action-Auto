@@ -13,6 +13,10 @@ on:
         description: "Also add the cards in todo.json (private repository, branch board) as Todo items"
         type: boolean
         default: false
+      convert:
+        description: "Turn every draft card into an issue of the private repository (assigned to Bhautik-4B)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -80,6 +84,45 @@ jobs:
           print(f"Cards added: {added}, already there: {skipped}, added without assignee: {noassign}")
           PY
           python3 "$RUNNER_TEMP/add.py"
+
+      - name: Turn draft cards into issues
+        if: ${{ inputs.convert }}
+        env:
+          TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+          ASSIGNEE: Bhautik-4B
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/convert.py" <<'PY'
+          import json, os, sys, urllib.request
+          token = os.environ["TOKEN"]; owner = os.environ["BOARD_OWNER"]; number = int(os.environ["BOARD_NUMBER"])
+          ro, rn = os.environ["PRIVATE_REPO"].split("/")
+          def gql(q, v):
+              req = urllib.request.Request("https://api.github.com/graphql", data=json.dumps({"query": q, "variables": v}).encode(),
+                  headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.load(r)
+          d = gql("""query($login: String!, $number: Int!, $ro: String!, $rn: String!, $who: String!) {
+            user(login: $login) { projectV2(number: $number) { items(first: 100) { nodes { id type } } } }
+            repository(owner: $ro, name: $rn) { id }
+            who: user(login: $who) { id } }""", {"login": owner, "number": number, "ro": ro, "rn": rn, "who": os.environ["ASSIGNEE"]})
+          if d.get("errors"): print("Read errors:", [e.get("type") for e in d["errors"]]); sys.exit(1)
+          repo = (d["data"].get("repository") or {}).get("id"); who = (d["data"].get("who") or {}).get("id")
+          if not repo: print("The private repository is not reachable with PROJECTS_TOKEN"); sys.exit(1)
+          drafts = [n["id"] for n in d["data"]["user"]["projectV2"]["items"]["nodes"] if n["type"] == "DRAFT_ISSUE"]
+          done = 0
+          for item in drafts:
+              r = gql("""mutation($i: ID!, $r: ID!) { convertProjectV2DraftIssueItemToIssue(input: {itemId: $i, repositoryId: $r}) {
+                item { content { ... on Issue { id assignees(first: 5) { totalCount } } } } } }""", {"i": item, "r": repo})
+              if r.get("errors"): print("Convert errors:", [e.get("type") for e in r["errors"]]); sys.exit(1)
+              issue = r["data"]["convertProjectV2DraftIssueItemToIssue"]["item"]["content"]
+              if who and issue["assignees"]["totalCount"] == 0:
+                  a = gql("""mutation($a: ID!, $u: [ID!]!) { addAssigneesToAssignable(input: {assignableId: $a, assigneeIds: $u}) { clientMutationId } }""",
+                          {"a": issue["id"], "u": [who]})
+                  if a.get("errors"): print("Assign errors:", [e.get("type") for e in a["errors"]])
+              done += 1
+          print(f"Draft cards turned into issues: {done} of {len(drafts)}")
+          PY
+          python3 "$RUNNER_TEMP/convert.py"
 
       - name: Read the board
         env:
