@@ -1,0 +1,133 @@
+name: Project board copy
+
+# A copy of the owner's GitHub Projects board (users/4BornGithub/projects/31),
+# read with the PROJECTS_TOKEN secret and saved into the private repository
+# (branch "board": board.json and board.md), where the coding sessions can read
+# it. This repository is public: nothing of the board is printed in this log.
+on:
+  schedule:
+    - cron: "17 */3 * * *"   # every 3 hours
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: project-board
+  cancel-in-progress: false
+
+env:
+  PRIVATE_REPO: Bhautik-4B/Game-Auto
+  BOARD_OWNER: 4BornGithub
+  BOARD_NUMBER: "31"
+
+jobs:
+  copy:
+    name: copy the board
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read the board
+        env:
+          TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ -n "$TOKEN" ] || { echo "::error::The PROJECTS_TOKEN secret is missing"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/board"
+          cat > "$RUNNER_TEMP/read.py" <<'PY'
+          import json, os, sys, urllib.request
+          token = os.environ["TOKEN"]; owner = os.environ["BOARD_OWNER"]; number = int(os.environ["BOARD_NUMBER"])
+          Q = """
+          query($login: String!, $number: Int!, $after: String) {
+            user(login: $login) { projectV2(number: $number) {
+              title shortDescription url closed updatedAt
+              items(first: 100, after: $after) {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  type updatedAt
+                  fieldValues(first: 30) { nodes {
+                    ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2FieldCommon { name } } }
+                    ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } }
+                    ... on ProjectV2ItemFieldNumberValue { number field { ... on ProjectV2FieldCommon { name } } }
+                    ... on ProjectV2ItemFieldDateValue { date field { ... on ProjectV2FieldCommon { name } } }
+                    ... on ProjectV2ItemFieldIterationValue { title field { ... on ProjectV2FieldCommon { name } } }
+                    ... on ProjectV2ItemFieldUserValue { users(first: 5) { nodes { login } } field { ... on ProjectV2FieldCommon { name } } }
+                    ... on ProjectV2ItemFieldLabelValue { labels(first: 10) { nodes { name } } field { ... on ProjectV2FieldCommon { name } } }
+                  } }
+                  content {
+                    ... on DraftIssue { title body }
+                    ... on Issue { title body number state url repository { nameWithOwner } }
+                    ... on PullRequest { title body number state url repository { nameWithOwner } }
+                  }
+                }
+              }
+            } }
+          }"""
+          def call(after):
+              req = urllib.request.Request("https://api.github.com/graphql",
+                  data=json.dumps({"query": Q, "variables": {"login": owner, "number": number, "after": after}}).encode(),
+                  headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.load(r)
+          items, after, project = [], None, None
+          while True:
+              d = call(after)
+              if d.get("errors"):
+                  print("GraphQL errors:", len(d["errors"]), "(details not printed: public log)"); sys.exit(1)
+              project = d["data"]["user"]["projectV2"]
+              if project is None: print("Board not found or not readable with this token"); sys.exit(1)
+              page = project["items"]
+              items += page["nodes"]
+              if not page["pageInfo"]["hasNextPage"]: break
+              after = page["pageInfo"]["endCursor"]
+          out = []
+          for n in items:
+              f = {}
+              for v in n["fieldValues"]["nodes"]:
+                  if not v or not v.get("field"): continue
+                  name = v["field"]["name"]
+                  if "users" in v: val = ", ".join(u["login"] for u in v["users"]["nodes"])
+                  elif "labels" in v: val = ", ".join(l["name"] for l in v["labels"]["nodes"])
+                  else: val = v.get("name") or v.get("text") or v.get("number") or v.get("date") or v.get("title")
+                  f[name] = val
+              c = n.get("content") or {}
+              out.append({"type": n["type"], "updatedAt": n["updatedAt"], "fields": f,
+                          "title": c.get("title"), "body": c.get("body"), "number": c.get("number"),
+                          "state": c.get("state"), "url": c.get("url"),
+                          "repo": (c.get("repository") or {}).get("nameWithOwner")})
+          meta = {k: project[k] for k in ("title", "shortDescription", "url", "closed", "updatedAt")}
+          d = os.environ["RUNNER_TEMP"] + "/board"
+          json.dump({"project": meta, "items": out}, open(d + "/board.json", "w"), indent=1, ensure_ascii=False)
+          # A readable copy, grouped by Status.
+          by = {}
+          for it in out: by.setdefault(it["fields"].get("Status") or "(no status)", []).append(it)
+          with open(d + "/board.md", "w") as m:
+              m.write(f"# {meta['title']}\n\n{meta.get('shortDescription') or ''}\n\nBoard updated {meta['updatedAt']}; {len(out)} items.\n")
+              for st, its in by.items():
+                  m.write(f"\n## {st} ({len(its)})\n\n")
+                  for it in its:
+                      extra = "; ".join(f"{k}: {v}" for k, v in it["fields"].items() if k not in ("Status", "Title") and v not in (None, ""))
+                      ref = f" ({it['repo']}#{it['number']})" if it.get("number") else ""
+                      m.write(f"- **{it['title'] or '(untitled)'}**{ref}" + (f" - {extra}" if extra else "") + "\n")
+                      if it.get("body"):
+                          body = it["body"].strip().replace("\r", "")
+                          m.write("".join(f"  > {line}\n" for line in body.split("\n")[:15]))
+          print(f"Board read: {len(out)} items")
+          PY
+          python3 "$RUNNER_TEMP/read.py"
+
+      - name: Save into the private repository
+        env:
+          TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          URL="https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
+          rm -rf b && mkdir b && cd b
+          if git clone -q --depth 1 --branch board "$URL" . 2>/dev/null; then :; else git init -q -b board && git remote add origin "$URL"; fi
+          cp "$RUNNER_TEMP"/board/board.json "$RUNNER_TEMP"/board/board.md .
+          git add board.json board.md
+          if git diff --cached --quiet; then echo "No change on the board"; exit 0; fi
+          git commit -q -m "Project board copy $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -q origin board
+          echo "Saved to branch board of the private repository"
