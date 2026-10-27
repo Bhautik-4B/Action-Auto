@@ -26,10 +26,27 @@ on:
         description: "Also test the backend: run it on this machine (private/backend), build the APK with BACKEND_URL=http://localhost:8080, sign the app in, then check the backend's database"
         type: boolean
         default: false
+      shell_pack:
+        description: "With backend: run the shell APK (no logic inside) with a logic pack signed by a test key, uploaded to the local backend and handed to everyone (the way the phones get it)"
+        type: boolean
+        default: false
+      stop_bet:
+        description: "Press Stop on device 1 right after its first bet, with the result not in yet: the app must read the result, then stop (STOP_BET: PASS)"
+        type: boolean
+        default: false
+      cloner:
+        description: "Cloner app for the test: dualspace (Dual Space Pro), clonehub (Clone Hub, com.multibox.clone.hub), multipleapp (Multiple App, com.multipleapp.clonespace; its APK here has no native code, so it may not run), clonemaster, multispace (Multi Space 1.1.3, com.dualspace.multispace.android)"
+        type: choice
+        options: [dualspace, clonehub, multipleapp, clonemaster, multispace]
+        default: dualspace
+      pcap:
+        description: "Record the emulator's network (what the game downloads: hosts, plain HTTP or TLS, sizes) into the results"
+        type: boolean
+        default: false
       android:
         description: "Android version of the emulators (10 uses screen capture, 11+ the accessibility screenshot)"
         type: choice
-        options: ["11", "10", "12", "12L", "13", "14", "15"]
+        options: ["11", "10", "9", "8.1", "12", "12L", "13", "14", "15"]
         default: "11"
       image:
         description: "Emulator image: google_apis, or google_apis_playstore (newer Android: the Play image may carry the ARM translation the game needs)"
@@ -67,7 +84,7 @@ permissions:
 
 concurrency:
   # One queue per phone shape: a "mixed" run and a normal one run side by side.
-  group: test-phone-apk-${{ inputs.screens || 'same' }}-${{ inputs.android || '11' }}-${{ inputs.network || 'normal' }}-${{ inputs.reinstall && 'reinstall' || 'keep' }}-${{ inputs.image || 'google_apis' }}-${{ inputs.probe || 'no' }}-${{ inputs.perm_off && 'permoff' || 'on' }}-${{ inputs.stop_start && 'ss' || 'x' }}
+  group: test-phone-apk-${{ inputs.screens || 'same' }}-${{ inputs.android || '11' }}-${{ inputs.shell_pack && 'pack' || 'nopack' }}-${{ inputs.pcap && 'pcap' || 'nopcap' }}-${{ inputs.network || 'normal' }}-${{ inputs.reinstall && 'reinstall' || 'keep' }}-${{ inputs.image || 'google_apis' }}-${{ inputs.probe || 'no' }}-${{ inputs.perm_off && 'permoff' || 'on' }}-${{ inputs.stop_start && 'ss' || 'x' }}-${{ inputs.stop_bet && 'sb' || 'x' }}-${{ inputs.cloner || 'dualspace' }}
   cancel-in-progress: false
 
 env:
@@ -132,6 +149,7 @@ jobs:
           npm ci --no-audit --no-fund
           B="$RUNNER_TEMP/backend"; mkdir -p "$B"
           JWT_SECRET="$(openssl rand -hex 32)" HOST=127.0.0.1 PORT=8080 DB_PATH="$B/app.db" NODE_ENV=production ALLOW_DIRECT_TOPUP=1 \
+            LOGIC_UPLOAD_TOKEN="test-upload-token-0123456789" \
             setsid nohup node src/server.js > "$B/server.log" 2>&1 < /dev/null &
           for i in $(seq 1 60); do curl -sf http://127.0.0.1:8080/healthz && break; sleep 1; done
           curl -sf http://127.0.0.1:8080/healthz || { echo "::error::Backend did not start"; tail -50 "$B/server.log"; exit 1; }
@@ -146,12 +164,38 @@ jobs:
           APP_ABIS: x86_64,arm64-v8a
         run: |
           # The unit tests too (winner pairing, as the workflow's pick_pair).
-          if ! gradle --no-daemon --console=plain assembleRelease testReleaseUnitTest >>"$RUNNER_TEMP/workflow_log.txt" 2>&1; then
+          if ! gradle --no-daemon --console=plain assembleFullRelease testFullReleaseUnitTest >>"$RUNNER_TEMP/workflow_log.txt" 2>&1; then
             grep -E "^e: |error:|What went wrong|FAILED|Test.*>" -A4 "$RUNNER_TEMP/workflow_log.txt" | head -60
             exit 1
           fi
-          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/phone-app.apk"
+          cp app/build/outputs/apk/full/release/app-full-release.apk "$RUNNER_TEMP/phone-app.apk"
           echo "APP_APK=$RUNNER_TEMP/phone-app.apk" >> "$GITHUB_ENV"
+
+      # shell_pack: the logic pack from the full compile above, signed with a key
+      # made here; the shell APK is built with that key's public half, the pack
+      # is uploaded to the local backend and handed to everyone. The run then
+      # uses the shell APK, which must download and load the pack (its log:
+      # "Bot logic: v1").
+      - name: Shell APK + logic pack
+        if: inputs.backend && inputs.shell_pack
+        working-directory: private/android-app
+        env:
+          APP_ABIS: x86_64,arm64-v8a
+        run: |
+          set -e
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$RUNNER_TEMP/test-logic-key.pem" 2>/dev/null
+          export LOGIC_PUBLIC_KEY="$(openssl pkey -in "$RUNNER_TEMP/test-logic-key.pem" -pubout -outform DER 2>/dev/null | base64 -w0)"
+          if ! gradle --no-daemon --console=plain assembleShellRelease >>"$RUNNER_TEMP/workflow_log.txt" 2>&1; then
+            grep -E "^e: |error:|What went wrong|FAILED" -A4 "$RUNNER_TEMP/workflow_log.txt" | head -60
+            exit 1
+          fi
+          ../scripts/make_logic_pack.sh . "$RUNNER_TEMP/pack" 1 "$RUNNER_TEMP/test-logic-key.pem" | tee -a "$GITHUB_STEP_SUMMARY"
+          CODE=$(curl -sS -o "$RUNNER_TEMP/pack/answer.json" -w '%{http_code}' -X PUT http://127.0.0.1:8080/api/v1/app/logic/packs/1 \
+            -H "Authorization: Bearer test-upload-token-0123456789" -H "Content-Type: application/json" --data-binary @"$RUNNER_TEMP/pack/upload.json")
+          [ "$CODE" = 200 ] || { echo "pack upload answered $CODE: $(cat "$RUNNER_TEMP/pack/answer.json")"; exit 1; }
+          (cd ../backend && DB_PATH="$BACKEND_DB" JWT_SECRET=x NODE_ENV=test node scripts/logic.js all 1) | tee -a "$GITHUB_STEP_SUMMARY"
+          cp app/build/outputs/apk/shell/release/app-shell-release.apk "$RUNNER_TEMP/phone-app.apk"
+          echo "The run uses the SHELL APK with logic pack v1 from the local backend" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Get game APK
         env:
@@ -161,7 +205,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/apk"
           gh release download --repo "$PRIVATE_REPO" --pattern '*.apk' --dir "$RUNNER_TEMP/apk" 2>/dev/null \
             || cp private/apk/*.apk "$RUNNER_TEMP/apk/" 2>/dev/null || { echo "::error::No APK found"; exit 1; }
-          APK="$(ls "$RUNNER_TEMP"/apk/*.apk | grep -vE '/(com\.ludashi\.dualspace|net\.typeblog\.shelter|co\.keeptop\.multi\.space|com\.dualspacepro\.multispace)_' | head -1)"
+          # The game is base.apk; every cloner APK of the release is left out.
+          APK="$RUNNER_TEMP/apk/base.apk"
+          [ -f "$APK" ] || APK="$(ls "$RUNNER_TEMP"/apk/*.apk | grep -vE '/(com\.ludashi\.dualspace|net\.typeblog\.shelter|co\.keeptop\.multi\.space|com\.dualspacepro\.multispace|com\.dualspace\.multispace|com\.cmaster|com\.multibox|com\.multipleapp|CLONE-HUB|MULTIPLE-APP)' | head -1)"
           echo "GAME_APK=$APK" >> "$GITHUB_ENV"
           echo "OUT_DIR=$RUNNER_TEMP/out" >> "$GITHUB_ENV"
           # The cloner app from release APK, as in Phase 1 (Multi Space, else Dual
@@ -170,7 +216,17 @@ jobs:
           # Dual Space Pro, from this repo's release "Dual" (uploaded by the owner).
           curl -fsSL -o "$RUNNER_TEMP/apk/com.dualspacepro.multispace_dual.apk" \
             "https://github.com/$GITHUB_REPOSITORY/releases/download/Dual/base.apk" || rm -f "$RUNNER_TEMP/apk/com.dualspacepro.multispace_dual.apk"
-          for C in co.keeptop.multi.space com.dualspacepro.multispace com.ludashi.dualspace; do
+          # The two of Clone Master's kind (release "APK" of the private repo, uploaded by the owner).
+          [ -f "$RUNNER_TEMP/apk/CLONE-HUB.apk" ] && mv "$RUNNER_TEMP/apk/CLONE-HUB.apk" "$RUNNER_TEMP/apk/com.multibox.clone.hub_1.apk"
+          [ -f "$RUNNER_TEMP/apk/MULTIPLE-APP.apk" ] && mv "$RUNNER_TEMP/apk/MULTIPLE-APP.apk" "$RUNNER_TEMP/apk/com.multipleapp.clonespace_1.apk"
+          case "${{ inputs.cloner || 'dualspace' }}" in
+            clonehub) ORDER="com.multibox.clone.hub" ;;
+            multipleapp) ORDER="com.multipleapp.clonespace" ;;
+            clonemaster) ORDER="com.cmaster.cloner" ;;
+            multispace) ORDER="com.dualspace.multispace.android" ;;
+            *) ORDER="co.keeptop.multi.space com.dualspacepro.multispace com.ludashi.dualspace" ;;
+          esac
+          for C in $ORDER; do
             F="$(ls "$RUNNER_TEMP"/apk/${C}_*.apk 2>/dev/null | head -1)"
             [ -n "$F" ] && { echo "CLONER_APK=$F" >> "$GITHUB_ENV"; echo "CLONER_PKG=$C" >> "$GITHUB_ENV"; echo "Cloner: $(basename "$F")"; break; }
           done
@@ -197,8 +253,9 @@ jobs:
           PROBE_GAME: ${{ inputs.probe == 'game' && '1' || '0' }}
           PERM_OFF: ${{ (inputs.perm_off && matrix.device == 1) && '1' || '0' }}
           STOP_START: ${{ (inputs.stop_start && matrix.device == 1) && '1' || '0' }}
+          STOP_BET: ${{ (inputs.stop_bet && matrix.device == 1) && '1' || '0' }}
         with:
-          api-level: ${{ (inputs.android == '10' && 29) || (inputs.android == '12' && 31) || (inputs.android == '12L' && 32) || (inputs.android == '13' && 33) || (inputs.android == '14' && 34) || (inputs.android == '15' && 35) || 30 }}
+          api-level: ${{ (inputs.android == '10' && 29) || (inputs.android == '9' && 28) || (inputs.android == '8.1' && 27) || (inputs.android == '12' && 31) || (inputs.android == '12L' && 32) || (inputs.android == '13' && 33) || (inputs.android == '14' && 34) || (inputs.android == '15' && 35) || 30 }}
           target: ${{ inputs.image || 'google_apis' }}
           arch: x86_64
           profile: pixel_4
@@ -206,11 +263,31 @@ jobs:
           ram-size: 6144M
           disk-size: 8G
           force-avd-creation: false
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save ${{ inputs.pcap && format('-tcpdump {0}/net.pcap', runner.temp) || '' }}
           disable-animations: true
           # The app's step lines are shown here with guest IDs hidden (public log).
           script: |
             bash -o pipefail -c 'bash private/scripts/test_phone_app.sh "$GAME_APK" "$APP_APK" "$OUT_DIR" 2>&1 | tee -a "$RUNNER_TEMP/workflow_log.txt" | { grep --line-buffered -E "^\[[0-9:]{8} [AP]M\] " | grep --line-buffered -vE "TAP |step_[0-9]+" | sed -u -E "s/(Guest ID: |guest|expected guest |but got |guest_id.: .)[0-9]+/\1***/g"; true; }'
+
+      # pcap: what went over the network, by host: plain HTTP (its requests, cacheable
+      # on the phone) or TLS (its server name), and how many bytes. Into the results.
+      - name: Network capture summary
+        if: always() && inputs.pcap
+        run: |
+          sudo apt-get install -y -qq tshark >/dev/null 2>&1 || true
+          P="$RUNNER_TEMP/net.pcap"; D="${OUT_DIR:-$RUNNER_TEMP/out}"; mkdir -p "$D"
+          [ -s "$P" ] || { echo "no capture" | tee "$D/network.txt"; exit 0; }
+          {
+            echo "### Bytes by server (TLS server name or HTTP host)"
+            tshark -r "$P" -Y "tls.handshake.extensions_server_name" -T fields -e tls.handshake.extensions_server_name -e ip.dst 2>/dev/null | sort -u | head -60
+            echo; echo "### Plain HTTP requests (host, URL, answer size)"
+            tshark -r "$P" -Y "http.request" -T fields -e http.host -e http.request.uri 2>/dev/null | sort | uniq -c | sort -rn | head -80
+            echo; echo "### HTTP answers (content length by host)"
+            tshark -r "$P" -Y "http.response" -T fields -e http.response_for.uri -e http.content_length 2>/dev/null | sort | uniq -c | sort -rn | head -40
+            echo; echo "### Traffic by destination (bytes)"
+            tshark -r "$P" -q -z conv,ip 2>/dev/null | tail -n +6 | head -40
+          } > "$D/network.txt" 2>&1
+          { echo "Network capture (device $DEVICE):"; echo '```'; head -120 "$D/network.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Backend server log
         if: always() && inputs.backend

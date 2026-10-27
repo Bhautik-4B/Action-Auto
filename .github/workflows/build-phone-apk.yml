@@ -18,6 +18,10 @@ on:
         description: "QA build only: the APK is a download of this run (Artifacts), NOT a release. Phones never see it and no release is deleted."
         type: boolean
         default: false
+      version:
+        description: "Version 2.<minor>.<patch>, e.g. 2.1.1 (code 20000 + minor*100 + patch). Empty: the old 1.<run>.<attempt> numbering (only while no 2.x is released)."
+        required: false
+        default: ""
 
 permissions:
   contents: write   # create the release
@@ -62,17 +66,30 @@ jobs:
       - name: Version
         env:
           GH_TOKEN: ${{ github.token }}
+          WANT: ${{ inputs.version }}
         run: |
-          RUN=$GITHUB_RUN_NUMBER; ATTEMPT=$GITHUB_RUN_ATTEMPT
+          # The highest released app code: phone-v1.<run>.<attempt> = run*10+attempt,
+          # phone-v2.<minor>.<patch> = 20000 + minor*100 + patch (the app and the server read them the same way).
           MAX="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' \
-            | sed -n 's/^phone-v1\.\([0-9]*\)\.\([0-9]*\)$/\1 \2/p' | awk '{ c = $1 * 10 + $2; if (c > m) m = c } END { print m + 0 }')"
-          if [ $((RUN * 10 + ATTEMPT)) -le "$MAX" ]; then
-            echo "Run $RUN attempt $ATTEMPT would be version 1.$RUN.$ATTEMPT, not newer than the released code $MAX"
-            RUN=$((MAX / 10 + 1)); ATTEMPT=1
+            | awk -F'[v.]' '/^phone-v1\.[0-9]+\.[0-9]+$/ { c = $3 * 10 + $4 } /^phone-v2\.[0-9]+\.[0-9]+$/ { c = 20000 + $3 * 100 + $4 } { if (c > m) m = c; c = 0 } END { print m + 0 }')"
+          if [ -n "$WANT" ]; then
+            if ! echo "$WANT" | grep -Eq '^2\.[0-9]{1,2}\.[0-9]{1,2}$'; then echo "::error::version must be 2.<minor>.<patch> (minor, patch 0-99), not $WANT"; exit 1; fi
+            MINOR="$(echo "$WANT" | cut -d. -f2)"; PATCH="$(echo "$WANT" | cut -d. -f3)"
+            CODE=$((20000 + 10#$MINOR * 100 + 10#$PATCH)); NAME="2.$((10#$MINOR)).$((10#$PATCH))"
+            # A release must be newer than every released one (QA builds may repeat a number).
+            if [ "${{ inputs.qa }}" != true ] && [ "$CODE" -le "$MAX" ]; then echo "::error::$NAME (code $CODE) is not newer than the released code $MAX"; exit 1; fi
+          else
+            if [ "$MAX" -ge 20000 ]; then echo "::error::a 2.x version is released: give the version input (e.g. 2.1.2)"; exit 1; fi
+            RUN=$GITHUB_RUN_NUMBER; ATTEMPT=$GITHUB_RUN_ATTEMPT
+            if [ $((RUN * 10 + ATTEMPT)) -le "$MAX" ]; then
+              echo "Run $RUN attempt $ATTEMPT would be version 1.$RUN.$ATTEMPT, not newer than the released code $MAX"
+              RUN=$((MAX / 10 + 1)); ATTEMPT=1
+            fi
+            CODE=$((RUN * 10 + ATTEMPT)); NAME="1.$RUN.$ATTEMPT"
           fi
-          echo "VERSION_CODE=$((RUN * 10 + ATTEMPT))" >> "$GITHUB_ENV"
-          echo "VERSION_NAME=1.$RUN.$ATTEMPT${{ inputs.qa && '-qa' || '' }}" >> "$GITHUB_ENV"
-          echo "Building version 1.$RUN.$ATTEMPT (code $((RUN * 10 + ATTEMPT)); newest released code: $MAX)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "VERSION_CODE=$CODE" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=$NAME${{ inputs.qa && '-qa' || '' }}" >> "$GITHUB_ENV"
+          echo "Building version $NAME (code $CODE; newest released code: $MAX)" | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Full output goes to a file; only compile errors are shown here.
       - name: Build
@@ -80,11 +97,11 @@ jobs:
         env:
           BACKEND_URL: ${{ inputs.backend_url }}
         run: |
-          if ! gradle --no-daemon --console=plain assembleRelease >"$RUNNER_TEMP/build_log.txt" 2>&1; then
+          if ! gradle --no-daemon --console=plain assembleShellRelease >"$RUNNER_TEMP/build_log.txt" 2>&1; then
             grep -E "^e: |error:|What went wrong|FAILURE" -A4 "$RUNNER_TEMP/build_log.txt" | head -80
             exit 1
           fi
-          ls -l app/build/outputs/apk/release/
+          ls -l app/build/outputs/apk/shell/release/
 
       # QA: only a download of this run. Phones look at releases only (Updater),
       # so a QA build never reaches users, and the live release stays.
@@ -92,7 +109,7 @@ jobs:
         if: ${{ inputs.qa }}
         run: |
           mkdir -p "$RUNNER_TEMP/qa"
-          cp private/android-app/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/qa/4B-Rummy-Home-$VERSION_NAME.apk"
+          cp private/android-app/app/build/outputs/apk/shell/release/app-shell-release.apk "$RUNNER_TEMP/qa/4B-Rummy-Home-$VERSION_NAME.apk"
           echo "QA build $VERSION_NAME: download it under Artifacts of this run. Not released." | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Upload QA APK
         if: ${{ inputs.qa }}
@@ -101,6 +118,18 @@ jobs:
           name: 4B-Rummy-Home-${{ env.VERSION_NAME }}
           path: ${{ runner.temp }}/qa/*.apk
           retention-days: 30
+      # The same QA APK as a direct download link: a pre-release tagged qa-v...
+      # Phones and the server only look at phone-v tags, so no phone ever sees it.
+      - name: Publish QA APK as a direct link
+        if: ${{ inputs.qa }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="qa-v$VERSION_NAME"
+          gh release create "$TAG" "$RUNNER_TEMP"/qa/*.apk --repo "$GITHUB_REPOSITORY" --prerelease \
+            --title "QA $VERSION_NAME (test only, not for users)" \
+            --notes "Test build from branch $GITHUB_REF_NAME. Phones do not update to it." || true
+          echo "Direct link: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/4B-Rummy-Home-$VERSION_NAME.apk" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Publish release
         if: ${{ !inputs.qa }}
@@ -110,7 +139,7 @@ jobs:
         run: |
           TAG="phone-v$VERSION_NAME"
           APK="$RUNNER_TEMP/4B-Rummy-Home-$TAG.apk"
-          cp private/android-app/app/build/outputs/apk/release/app-release.apk "$APK"
+          cp private/android-app/app/build/outputs/apk/shell/release/app-shell-release.apk "$APK"
           # A build from a test branch is marked as a pre-release.
           PRE=""; [ "$GITHUB_REF_NAME" = main ] || PRE="--prerelease"
           # The tag goes on the default branch: GitHub refuses this token a tag on a
@@ -123,8 +152,17 @@ jobs:
           # code (and their tags) are deleted. The app updates itself from the
           # newest one. (A higher one is never deleted, so a release can never
           # be replaced by an older version.)
+          # Each one is kept first as backup-<tag> (a pre-release no phone or server
+          # reads), so an older version can always be built or handed out again.
           gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' \
-            | sed -n 's/^phone-v1\.\([0-9]*\)\.\([0-9]*\)$/& \1 \2/p' | while read -r OLD R A; do
-                [ $((R * 10 + A)) -lt "$VERSION_CODE" ] || continue
-                gh release delete "$OLD" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag && echo "Deleted old release $OLD"
+            | awk -F'[v.]' '/^phone-v1\.[0-9]+\.[0-9]+$/ { print $0, $3 * 10 + $4 } /^phone-v2\.[0-9]+\.[0-9]+$/ { print $0, 20000 + $3 * 100 + $4 }' | while read -r OLD C; do
+                [ "$C" -lt "$VERSION_CODE" ] || continue
+                B="$RUNNER_TEMP/backup-$OLD"; mkdir -p "$B"
+                if ! gh release view "backup-$OLD" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+                  gh release download "$OLD" --repo "$GITHUB_REPOSITORY" --pattern '*.apk' --dir "$B" \
+                    && gh release create "backup-$OLD" "$B"/*.apk --repo "$GITHUB_REPOSITORY" --prerelease \
+                         --title "Backup of $OLD (not for phones)" --notes "The app as released under $OLD, kept when a newer version replaced it." \
+                    || { echo "::warning::backup of $OLD failed: it is NOT deleted"; continue; }
+                fi
+                gh release delete "$OLD" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag && echo "Deleted old release $OLD (kept as backup-$OLD)"
               done || true
