@@ -207,7 +207,7 @@ jobs:
             || cp private/apk/*.apk "$RUNNER_TEMP/apk/" 2>/dev/null || { echo "::error::No APK found"; exit 1; }
           # The game is base.apk; every cloner APK of the release is left out.
           APK="$RUNNER_TEMP/apk/base.apk"
-          [ -f "$APK" ] || APK="$(ls "$RUNNER_TEMP"/apk/*.apk | grep -vE '/(com\.ludashi\.dualspace|net\.typeblog\.shelter|co\.keeptop\.multi\.space|com\.dualspacepro\.multispace|com\.dualspace\.multispace|com\.cmaster|com\.multibox|com\.multipleapp|CLONE-HUB|MULTIPLE-APP)' | head -1)"
+          [ -f "$APK" ] || APK="$(ls "$RUNNER_TEMP"/apk/*.apk | grep -vE '/(com\.ludashi\.dualspace|net\.typeblog\.shelter|co\.keeptop\.multi\.space|com\.dualspacepro\.multispace|com\.dualspace\.multispace|com\.cmaster|com\.multibox|com\.multipleapp|CLONE-HUB|MULTIPLE-APP|Clone-Master)' | head -1)"
           echo "GAME_APK=$APK" >> "$GITHUB_ENV"
           echo "OUT_DIR=$RUNNER_TEMP/out" >> "$GITHUB_ENV"
           # The cloner app from release APK, as in Phase 1 (Multi Space, else Dual
@@ -219,6 +219,7 @@ jobs:
           # The two of Clone Master's kind (release "APK" of the private repo, uploaded by the owner).
           [ -f "$RUNNER_TEMP/apk/CLONE-HUB.apk" ] && mv "$RUNNER_TEMP/apk/CLONE-HUB.apk" "$RUNNER_TEMP/apk/com.multibox.clone.hub_1.apk"
           [ -f "$RUNNER_TEMP/apk/MULTIPLE-APP.apk" ] && mv "$RUNNER_TEMP/apk/MULTIPLE-APP.apk" "$RUNNER_TEMP/apk/com.multipleapp.clonespace_1.apk"
+          [ -f "$RUNNER_TEMP/apk/Clone-Master.apk" ] && mv "$RUNNER_TEMP/apk/Clone-Master.apk" "$RUNNER_TEMP/apk/com.cmaster.cloner_1.apk"
           case "${{ inputs.cloner || 'dualspace' }}" in
             clonehub) ORDER="com.multibox.clone.hub" ;;
             multipleapp) ORDER="com.multipleapp.clonespace" ;;
