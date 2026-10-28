@@ -158,9 +158,17 @@ jobs:
           def pick(word):
               w = word.lower().replace("-", "").replace(" ", "")
               keys = {"todo": ["todo", "backlog"], "progress": ["progress", "doing"], "done": ["done", "complete", "closed"]}.get(w, [w])
+              norm = lambda x: x.lower().replace("-", "").replace(" ", "")
+              # An exact name first ("Done", not "Done But Not Deployed"), then a part of one.
               for k in keys:
                   for o in opts:
-                      if k in o["name"].lower().replace("-", "").replace(" ", ""): return o
+                      if norm(o["name"]) == k: return o
+              for k in keys:
+                  for o in opts:
+                      if k in norm(o["name"]) and "not" not in norm(o["name"]): return o
+              for k in keys:
+                  for o in opts:
+                      if k in norm(o["name"]): return o
               return None
           want = json.load(open(os.environ["RUNNER_TEMP"] + "/st/status.json"))
           done = missing = 0
