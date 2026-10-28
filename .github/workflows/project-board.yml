@@ -60,14 +60,27 @@ jobs:
           d = gql("""query($login: String!, $number: Int!, $who: String!) {
             user(login: $login) { projectV2(number: $number) { id
               fields(first: 50) { nodes { ... on ProjectV2SingleSelectField { id name options { id name } } } }
-              items(first: 100) { nodes { content { ... on DraftIssue { title } ... on Issue { title } ... on PullRequest { title } } } } } }
+              } }
             who: user(login: $who) { id } }""", {"login": owner, "number": number, "who": os.environ["ASSIGNEE"]})
           if d.get("errors"): print("Read errors:", [e.get("type") for e in d["errors"]]); sys.exit(1)
           proj = d["data"]["user"]["projectV2"]; who = (d["data"].get("who") or {}).get("id")
           status = next((f for f in proj["fields"]["nodes"] if f and f.get("name", "").lower() == "status"), None)
           todo = next((o for o in (status or {}).get("options", []) if o["name"].lower().replace(" ", "") == "todo"), None)
           print("Status field:", bool(status), "Todo option:", bool(todo), "assignee found:", bool(who))
-          have = {(n.get("content") or {}).get("title") for n in proj["items"]["nodes"]}
+          # Every item of the board, page by page (the board has more than 100 items; reading
+          # only the first 100 left new cards as drafts, without a status, or added them twice).
+          def all_items(fields):
+              out, after = [], None
+              while True:
+                  r = gql("""query($login: String!, $number: Int!, $after: String) { user(login: $login) { projectV2(number: $number) {
+                      items(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { %s } } } } }""" % fields,
+                      {"login": owner, "number": number, "after": after})
+                  if r.get("errors"): print("Read errors:", [e.get("type") for e in r["errors"]]); sys.exit(1)
+                  page = r["data"]["user"]["projectV2"]["items"]
+                  out += page["nodes"]
+                  if not page["pageInfo"]["hasNextPage"]: return out
+                  after = page["pageInfo"]["endCursor"]
+          have = {(n.get("content") or {}).get("title") for n in all_items("content { ... on DraftIssue { title } ... on Issue { title } ... on PullRequest { title } }")}
           cards = json.load(open(os.environ["RUNNER_TEMP"] + "/src/todo.json"))
           added = skipped = noassign = 0
           M = """mutation($p: ID!, $t: String!, $b: String, $a: [ID!]) {
@@ -107,13 +120,26 @@ jobs:
               with urllib.request.urlopen(req, timeout=30) as r:
                   return json.load(r)
           d = gql("""query($login: String!, $number: Int!, $ro: String!, $rn: String!, $who: String!) {
-            user(login: $login) { projectV2(number: $number) { items(first: 100) { nodes { id type } } } }
+            user(login: $login) { projectV2(number: $number) { id } }
             repository(owner: $ro, name: $rn) { id }
             who: user(login: $who) { id } }""", {"login": owner, "number": number, "ro": ro, "rn": rn, "who": os.environ["ASSIGNEE"]})
           if d.get("errors"): print("Read errors:", [e.get("type") for e in d["errors"]]); sys.exit(1)
           repo = (d["data"].get("repository") or {}).get("id"); who = (d["data"].get("who") or {}).get("id")
           if not repo: print("The issue repository is not reachable with PROJECTS_TOKEN"); sys.exit(1)
-          drafts = [n["id"] for n in d["data"]["user"]["projectV2"]["items"]["nodes"] if n["type"] == "DRAFT_ISSUE"]
+          # Every item of the board, page by page (the board has more than 100 items; reading
+          # only the first 100 left new cards as drafts, without a status, or added them twice).
+          def all_items(fields):
+              out, after = [], None
+              while True:
+                  r = gql("""query($login: String!, $number: Int!, $after: String) { user(login: $login) { projectV2(number: $number) {
+                      items(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { %s } } } } }""" % fields,
+                      {"login": owner, "number": number, "after": after})
+                  if r.get("errors"): print("Read errors:", [e.get("type") for e in r["errors"]]); sys.exit(1)
+                  page = r["data"]["user"]["projectV2"]["items"]
+                  out += page["nodes"]
+                  if not page["pageInfo"]["hasNextPage"]: return out
+                  after = page["pageInfo"]["endCursor"]
+          drafts = [n["id"] for n in all_items("id type") if n["type"] == "DRAFT_ISSUE"]
           done = 0
           for item in drafts:
               r = gql("""mutation($i: ID!, $r: ID!) { convertProjectV2DraftIssueItemToIssue(input: {itemId: $i, repositoryId: $r}) {
@@ -147,7 +173,7 @@ jobs:
                   return json.load(r)
           d = gql("""query($login: String!, $number: Int!) { user(login: $login) { projectV2(number: $number) { id
               fields(first: 50) { nodes { ... on ProjectV2SingleSelectField { id name options { id name } } } }
-              items(first: 100) { nodes { id content { ... on DraftIssue { title } ... on Issue { title } ... on PullRequest { title } } } } } } }""",
+              } } }""",
               {"login": owner, "number": number})
           if d.get("errors"): print("Read errors:", [e.get("type") for e in d["errors"]]); sys.exit(1)
           proj = d["data"]["user"]["projectV2"]
@@ -172,7 +198,20 @@ jobs:
               return None
           want = json.load(open(os.environ["RUNNER_TEMP"] + "/st/status.json"))
           done = missing = 0
-          for n in proj["items"]["nodes"]:
+          # Every item of the board, page by page (the board has more than 100 items; reading
+          # only the first 100 left new cards as drafts, without a status, or added them twice).
+          def all_items(fields):
+              out, after = [], None
+              while True:
+                  r = gql("""query($login: String!, $number: Int!, $after: String) { user(login: $login) { projectV2(number: $number) {
+                      items(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { %s } } } } }""" % fields,
+                      {"login": owner, "number": number, "after": after})
+                  if r.get("errors"): print("Read errors:", [e.get("type") for e in r["errors"]]); sys.exit(1)
+                  page = r["data"]["user"]["projectV2"]["items"]
+                  out += page["nodes"]
+                  if not page["pageInfo"]["hasNextPage"]: return out
+                  after = page["pageInfo"]["endCursor"]
+          for n in all_items("id content { ... on DraftIssue { title } ... on Issue { title } ... on PullRequest { title } }"):
               t = (n.get("content") or {}).get("title")
               if t not in want: continue
               o = pick(want[t])
