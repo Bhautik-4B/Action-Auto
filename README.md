@@ -15,6 +15,8 @@ private repo, APKs to its release `multispace-ci-<branch>`.
 
 - **4bTech Space - build and unit tests** (`multispace-build.yml`): compiles all modules,
   runs the unit tests, builds debug/release APKs.
+- **4bTech Space - release APK** (`multispace-release.yml`): one universal release APK,
+  uploaded to release `APK` of Game-Auto as `4bTech-Space-<version>.apk` / `4bTech-Space.apk`.
 - **4bTech Space - end-to-end on Android (ARM)** (`multispace-e2e.yml`): real arm64 Android
   8.1, 9, 10, 11, 13 and 15 (Redroid containers on `ubuntu-24.04-arm` runners) with 2 GB / 4 GB / 6 GB
   memory limits; clones a test app 3 times and checks each copy is isolated.
