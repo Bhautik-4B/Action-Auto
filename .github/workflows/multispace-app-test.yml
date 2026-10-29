@@ -1,0 +1,127 @@
+name: 4bTech Space - test one app in clones
+
+# Installs one real app (an APK on the "APK" release of the private repo Bhautik-4B/Game-Auto)
+# inside 4bTech Space on real ARM Android (Redroid): clones it, opens every copy, screenshots
+# them, kills the clone processes and reopens a copy. Results (screenshots, log, notes):
+# branch "results" of the private repo, runs/<time>-multispace-app-test-run<id>/.
+
+on:
+  workflow_dispatch:
+    inputs:
+      asset:
+        description: "APK file name on the Game-Auto 'APK' release"
+        required: true
+        default: "Test-4bTech-Space-Teen-Pati.apk"
+      count:
+        description: "How many copies"
+        required: false
+        default: "4"
+      android:
+        description: "Android version (Redroid image tag): 8.1.0, 9.0.0, 10.0.0, 11.0.0, 12.0.0, 13.0.0, 14.0.0, 15.0.0"
+        required: false
+        default: "11.0.0"
+      ref:
+        description: "Branch of the private repo"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+
+env:
+  PRIVATE_REPO: 4BornGithub/4B-Multi-Space
+  DOWNLOAD_REPO: Bhautik-4B/Game-Auto
+
+jobs:
+  build:
+    name: build debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      token: ${{ steps.token.outputs.name }}
+    steps:
+      - name: Pick a token for the private repos
+        id: token
+        env:
+          MULTISPACE_REPO_TOKEN: ${{ secrets.MULTISPACE_REPO_TOKEN }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          PROJECTS_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+        run: |
+          for n in MULTISPACE_REPO_TOKEN PRIVATE_REPO_TOKEN PROJECTS_TOKEN; do
+            v="${!n}"; [ -n "$v" ] || continue
+            if git ls-remote "https://x-access-token:$v@github.com/$PRIVATE_REPO.git" HEAD >/dev/null 2>&1 \
+               && git ls-remote "https://x-access-token:$v@github.com/$DOWNLOAD_REPO.git" HEAD >/dev/null 2>&1; then
+              echo "Using $n" | tee -a "$GITHUB_STEP_SUMMARY"; echo "name=$n" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+          done
+          echo "::error::No token secret can read both repos"; exit 1
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets[steps.token.outputs.name] }}
+          path: private
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+      - name: Build
+        working-directory: private
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;29.0.13846066" >/dev/null
+          gradle --no-daemon --console=plain :app:assembleDebug >"$RUNNER_TEMP/build_log.txt" 2>&1 || { grep -E "^e: |error:|What went wrong" -A3 "$RUNNER_TEMP/build_log.txt" | head -40; exit 1; }
+          mkdir -p "$RUNNER_TEMP/x"
+          cp app/build/outputs/apk/debug/*universal*.apk "$RUNNER_TEMP/x/app.apk"
+          cp scripts/ci/app-test.sh scripts/ci/save-results.sh "$RUNNER_TEMP/x/"
+      - name: The app under test (private release)
+        env:
+          GH_TOKEN: ${{ secrets[steps.token.outputs.name] }}
+        run: gh release download APK --repo "$DOWNLOAD_REPO" --pattern "${{ inputs.asset }}" --dir "$RUNNER_TEMP/x" && mv "$RUNNER_TEMP/x/${{ inputs.asset }}" "$RUNNER_TEMP/x/test.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: multispace-app-test-files
+          path: ${{ runner.temp }}/x
+          retention-days: 1
+
+  test:
+    name: ${{ inputs.asset }} on Android ${{ inputs.android }} (ARM)
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    env:
+      ANDROID_SERIAL: localhost:6000
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: multispace-app-test-files
+          path: x
+      - name: Start Android (Redroid, arm64)
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          sudo apt-get update -qq >/dev/null
+          sudo apt-get install -y -qq adb "linux-modules-extra-$(uname -r)" >/dev/null 2>&1 || sudo apt-get install -y -qq adb >/dev/null
+          sudo modprobe binder_linux devices="binder,hwbinder,vndbinder"
+          sudo modprobe ashmem_linux 2>/dev/null || true
+          docker pull -q "redroid/redroid:${{ inputs.android }}-latest" >/dev/null
+          docker run -d --name android --privileged --memory=6g --cpus=4 -p 6000:5555 "redroid/redroid:${{ inputs.android }}-latest" \
+            androidboot.redroid_gpu_mode=guest androidboot.use_memfd=true androidboot.redroid_width=1080 androidboot.redroid_height=2280 androidboot.redroid_dpi=420
+          for i in $(seq 1 84); do adb connect localhost:6000 >/dev/null 2>&1; [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] && break; sleep 5; done
+          [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] || { docker logs android 2>&1 | tail -100 > "$RUNNER_TEMP/out/boot_failure.txt"; echo "::error::Android did not boot"; exit 1; }
+      - name: Test the app in clones
+        run: |
+          bash x/app-test.sh x/app.apk x/test.apk "$RUNNER_TEMP/out/app-test" "${{ inputs.count }}" > "$RUNNER_TEMP/out/console.txt" 2>&1; RC=$?
+          { echo "### ${{ inputs.asset }} in 4bTech Space, Android ${{ inputs.android }}"; echo '```'; cut -c1-220 "$RUNNER_TEMP/out/app-test/notes.txt"; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+          docker stop android >/dev/null 2>&1 || true
+          echo "RC=$RC" >> "$GITHUB_ENV"
+      - name: Save results to private repo (branch "results")
+        if: always()
+        env:
+          TOKEN: ${{ secrets[needs.build.outputs.token] }}
+        run: set -o pipefail; bash x/save-results.sh "$RUNNER_TEMP/out" app-test | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Fail if the app failed in a clone
+        if: env.RC != '0'
+        run: exit 1
