@@ -117,6 +117,14 @@ jobs:
             "$BT/apksigner" verify --print-certs "$OUT" | grep -E "Signer #1 certificate (DN|SHA-256)"
             "$BT/aapt" dump badging "$OUT" | grep -E "^package:|sdkVersion|native-code" ; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
 
+      - name: Save the build log to the private repo (branch "results")
+        if: always()
+        env:
+          TOKEN: ${{ secrets[steps.token.outputs.name] }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/out" && cp "$RUNNER_TEMP/build_log.txt" "$RUNNER_TEMP/out/" 2>/dev/null || true
+          bash private/scripts/ci/save-results.sh "$RUNNER_TEMP/out" release | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Upload to the download release (Game-Auto, tag APK) and the private archive
         env:
           GH_TOKEN: ${{ secrets[steps.token.outputs.name] }}
