@@ -19,6 +19,11 @@ on:
         description: "Branch of the private repo"
         required: false
         default: "main"
+      qa:
+        description: "Test build only: a prerelease space-qa-v<version> here; no phone updates to it, the download pages are not touched"
+        type: boolean
+        required: false
+        default: false
   # Manual only: every run publishes a version that phones install.
 
 permissions:
@@ -130,7 +135,25 @@ jobs:
           mkdir -p "$RUNNER_TEMP/out" && cp "$RUNNER_TEMP/build_log.txt" "$RUNNER_TEMP/out/" 2>/dev/null || true
           bash private/scripts/ci/save-results.sh "$RUNNER_TEMP/out" release | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # A test build: only a prerelease with its own tag (the app's updater reads space-latest.json
+      # and space-v<version> releases that are not prereleases: it never sees this one).
+      - name: Publish the test build (prerelease space-qa-v${{ env.VERSION_NAME }})
+        if: ${{ inputs.qa }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="space-qa-v$VERSION_NAME"
+          QA="$RUNNER_TEMP/4bTech-Space-$VERSION_NAME-qa.apk"; cp "$APK" "$QA"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$QA" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "$QA" --repo "$GITHUB_REPOSITORY" --prerelease --title "4bTech Space $VERSION_NAME (test only)" \
+              --notes "Test build of 4bTech Space $VERSION_NAME from $PRIVATE_REF. Not for users: phones never update to it."
+          fi
+          echo "Test download: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/4bTech-Space-$VERSION_NAME-qa.apk" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Upload to the download release (Game-Auto, tag APK) and the private archive
+        if: ${{ !inputs.qa }}
         env:
           GH_TOKEN: ${{ secrets[steps.token.outputs.name] }}
         run: |
@@ -146,6 +169,7 @@ jobs:
       # Phones update from here: this repo is public, so the app can read the release list and
       # download the APK without any token. Tag space-v<version>; one versioned APK per release.
       - name: Publish the public release the app updates from (tag space-v${{ env.VERSION_NAME }})
+        if: ${{ !inputs.qa }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
