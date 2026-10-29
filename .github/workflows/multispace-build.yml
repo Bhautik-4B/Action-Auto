@@ -1,6 +1,6 @@
-name: MultiSpace - build and unit tests
+name: 4bTech Space - build and unit tests
 
-# Builds 4B Multi Space from the PRIVATE repo 4BornGithub/4b-multi-space (reached with the
+# Builds 4bTech Space from the PRIVATE repo 4BornGithub/4b-multi-space (reached with the
 # first of the secrets MULTISPACE_REPO_TOKEN, PRIVATE_REPO_TOKEN, PROJECTS_TOKEN that
 # can read it) and runs
 # the unit tests. Nothing private is printed here beyond compile-error lines: the full log,
@@ -113,7 +113,7 @@ jobs:
           TESTS=$( [ -n "$XML" ] && grep -ho '<testsuite [^>]*tests="[0-9]*"' $XML | grep -o 'tests="[0-9]*"' | grep -o '[0-9]*' | awk '{s+=$1} END {print s+0}' || echo 0)
           FAILS=$( [ -n "$XML" ] && grep -ho '<testsuite [^>]*failures="[0-9]*"' $XML | grep -o 'failures="[0-9]*"' | grep -o '[0-9]*' | awk '{s+=$1} END {print s+0}' || echo 0)
           {
-            echo "### 4B Multi Space build: ${BUILD:-failed}"
+            echo "### 4bTech Space build: ${BUILD:-failed}"
             echo "Branch $PRIVATE_REF, commit $(git rev-parse --short HEAD), version 0.1.$GITHUB_RUN_NUMBER"
             echo "Unit tests: ${TESTS:-0} run, ${FAILS:-0} failed"
             echo '```'; awk '{printf "%6.1f MB  %s\n", $1/1048576, $2}' "$OUT/apks.txt"; echo '```'

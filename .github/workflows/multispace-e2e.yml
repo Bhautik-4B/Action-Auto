@@ -1,8 +1,8 @@
-name: MultiSpace - end-to-end on Android (ARM)
+name: 4bTech Space - end-to-end on Android (ARM)
 
-# Builds 4B Multi Space (debug) and its e2e guest app from the PRIVATE repo
+# Builds 4bTech Space (debug) and its e2e guest app from the PRIVATE repo
 # 4BornGithub/4B-Multi-Space and runs scripts/ci/e2e.sh against real ARM Android systems:
-# Redroid (Android 11-15, arm64, running as a Docker container) on GitHub's free ARM
+# Redroid (Android 8.1-15, arm64, running as a Docker container) on GitHub's free ARM
 # runners. No emulator and no x86->ARM translation: the x86 emulator cannot run the
 # engine's inline hooks (it crashes in libndk_translation), and GitHub's ARM runners have
 # no KVM for the normal emulator. Each container gets a memory limit shaped like a low-end,
@@ -121,6 +121,9 @@ jobs:
       matrix:
         include:
           # memory/cpus: Docker limits on the whole Android system, like a phone of that class.
+          - { device: android8.1-low-2gb, image: "redroid/redroid:8.1.0-latest",  memory: 2g, cpus: 2, experimental: true }
+          - { device: android9-low-2gb,   image: "redroid/redroid:9.0.0-latest",  memory: 2g, cpus: 2, experimental: true }
+          - { device: android10-mid-3gb,  image: "redroid/redroid:10.0.0-latest", memory: 3g, cpus: 2, experimental: true }
           - { device: android11-low-2gb,  image: "redroid/redroid:11.0.0-latest", memory: 2g, cpus: 2, experimental: false }
           - { device: android11-high-6gb, image: "redroid/redroid:11.0.0-latest", memory: 6g, cpus: 4, experimental: false }
           - { device: android13-mid-4gb,  image: "redroid/redroid:13.0.0-latest", memory: 4g, cpus: 4, experimental: true }
