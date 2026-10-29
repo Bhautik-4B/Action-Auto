@@ -14,9 +14,14 @@ on:
         description: "Seconds to wait for a first start to settle"
         required: false
         default: "480"
-  push:
-    paths:
-      - .github/workflows/multispace-experiment.yml
+      ref:
+        description: "Branch of the private repo"
+        required: false
+        default: "main"
+      script:
+        description: "warmup-experiment or seed-verify (proof that a new copy starts without downloading)"
+        required: false
+        default: "warmup-experiment"
 
 permissions:
   contents: read
@@ -51,6 +56,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ${{ env.PRIVATE_REPO }}
+          ref: ${{ inputs.ref || 'main' }}
           token: ${{ secrets[steps.token.outputs.name] }}
           path: private
       - uses: actions/setup-java@v4
@@ -69,6 +75,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/x"
           cp app/build/outputs/apk/debug/*universal*.apk "$RUNNER_TEMP/x/app.apk"
           cp scripts/ci/warmup-experiment.sh scripts/ci/save-results.sh "$RUNNER_TEMP/x/"
+          cp scripts/ci/seed-verify.sh "$RUNNER_TEMP/x/" 2>/dev/null || true
       - name: The game (private release)
         env:
           GH_TOKEN: ${{ secrets[steps.token.outputs.name] }}
@@ -104,7 +111,7 @@ jobs:
       - name: Run the experiment
         run: |
           mkdir -p "$RUNNER_TEMP/out"
-          bash x/warmup-experiment.sh x/app.apk x/game.apk "$RUNNER_TEMP/out/experiment" "${{ inputs.max_wait || '480' }}" > "$RUNNER_TEMP/out/console.txt" 2>&1 || true
+          bash "x/${{ inputs.script || 'warmup-experiment' }}.sh" x/app.apk x/game.apk "$RUNNER_TEMP/out/experiment" "${{ inputs.max_wait || '480' }}" > "$RUNNER_TEMP/out/console.txt" 2>&1 || true
           { echo "### Warm-up experiment"; echo '```'; cut -c1-200 "$RUNNER_TEMP/out/experiment/notes.txt"; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
           docker stop android >/dev/null 2>&1 || true
       - name: Save results to private repo (branch "results")
