@@ -91,12 +91,13 @@ jobs:
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;29.0.13846066" >/dev/null
-          if ! gradle --no-daemon --console=plain :app:assembleDebug :testing:guest-app:assembleDebug >"$RUNNER_TEMP/build_log.txt" 2>&1; then
+          if ! gradle --no-daemon --console=plain :app:assembleDebug :app:assembleRelease :testing:guest-app:assembleDebug >"$RUNNER_TEMP/build_log.txt" 2>&1; then
             grep -E "^e: |error:|What went wrong" -A3 "$RUNNER_TEMP/build_log.txt" | head -60
             exit 1
           fi
           mkdir -p "$RUNNER_TEMP/e2e"
           cp app/build/outputs/apk/debug/*universal*.apk "$RUNNER_TEMP/e2e/app.apk"
+          cp app/build/outputs/apk/release/*universal*.apk "$RUNNER_TEMP/e2e/release.apk"
           cp testing/guest-app/build/outputs/apk/debug/*.apk "$RUNNER_TEMP/e2e/guest.apk"
           cp scripts/ci/e2e.sh scripts/ci/ui-tour.sh scripts/ci/save-results.sh "$RUNNER_TEMP/e2e/"
 
@@ -156,7 +157,7 @@ jobs:
 
       - name: Run the e2e test
         run: |
-          bash e2e/e2e.sh e2e/app.apk e2e/guest.apk "$RUNNER_TEMP/out/${{ matrix.device }}" full > "$RUNNER_TEMP/out/e2e_console.txt" 2>&1 || touch "$RUNNER_TEMP/out/FAILED"
+          bash e2e/e2e.sh e2e/app.apk e2e/guest.apk "$RUNNER_TEMP/out/${{ matrix.device }}" full e2e/release.apk > "$RUNNER_TEMP/out/e2e_console.txt" 2>&1 || touch "$RUNNER_TEMP/out/FAILED"
           docker logs android > "$RUNNER_TEMP/out/redroid_log.txt" 2>&1 || true
           docker stop android >/dev/null 2>&1 || true
 
