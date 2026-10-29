@@ -160,7 +160,10 @@ jobs:
           # The public download page: the versioned file plus 4bTech-Space.apk (always the newest).
           gh release view APK --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
             || gh release create APK --repo "$GITHUB_REPOSITORY" --title "4bTech Space - download" --notes "4bTech-Space.apk is always the newest version; older versions are kept by name."
-          gh release upload APK "$APK" "$RUNNER_TEMP/4bTech-Space.apk" --repo "$GITHUB_REPOSITORY" --clobber
+          # What phones read first to learn the newest version (a plain download, no API limit).
+          printf '{"version":"%s","code":%s,"url":"https://github.com/%s/releases/download/%s/4bTech-Space-%s.apk"}\n' \
+            "$VERSION_NAME" "$VERSION_CODE" "$GITHUB_REPOSITORY" "$TAG" "$VERSION_NAME" > "$RUNNER_TEMP/space-latest.json"
+          gh release upload APK "$APK" "$RUNNER_TEMP/4bTech-Space.apk" "$RUNNER_TEMP/space-latest.json" --repo "$GITHUB_REPOSITORY" --clobber
           echo "Public download: https://github.com/$GITHUB_REPOSITORY/releases/download/APK/4bTech-Space-$VERSION_NAME.apk" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "Public latest:   https://github.com/$GITHUB_REPOSITORY/releases/download/APK/4bTech-Space.apk" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "Latest:   https://github.com/$DOWNLOAD_REPO/releases/download/APK/4bTech-Space.apk" | tee -a "$GITHUB_STEP_SUMMARY"
