@@ -12,16 +12,14 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version shown in the app, e.g. 1.0.0 (code = run number)"
+        description: "Version, e.g. 1.0.1 (code = major*10000 + minor*100 + patch)"
         required: false
         default: ""
       ref:
         description: "Branch of the private repo"
         required: false
         default: "main"
-  push:
-    paths:
-      - .github/workflows/multispace-release.yml
+  # Manual only: every run publishes a version that phones install.
 
 permissions:
   contents: write   # the public release (tag space-v<version>) that phones update from
