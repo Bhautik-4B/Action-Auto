@@ -201,8 +201,9 @@ jobs:
           # <package>|<github repo>|<asset name filter>: the release APK of each open-source app.
           for spec in "org.fossify.calculator|FossifyOrg/Calculator|foss" "org.telegram.messenger|Telegram-FOSS-Team/Telegram-FOSS|arm64"; do
             P=${spec%%|*}; R=$(echo "$spec" | cut -d'|' -f2); F=${spec##*|}
-            URL=$(gh api "repos/$R/releases/latest" --jq ".assets[] | select(.name|endswith(\".apk\")) | select(.name|test(\"$F\")) | .browser_download_url" | head -1)
-            [ -n "$URL" ] || URL=$(gh api "repos/$R/releases/latest" --jq '.assets[] | select(.name|endswith(".apk")) | .browser_download_url' | head -1)
+            # Newest stable (non-prerelease) release with an APK matching the filter.
+            URL=$(gh api "repos/$R/releases?per_page=15" --jq "[.[] | select(.prerelease==false) | .assets[] | select(.name|endswith(\".apk\")) | select(.name|test(\"$F\")) | .browser_download_url][0] // empty")
+            [ -n "$URL" ] || URL=$(gh api "repos/$R/releases?per_page=15" --jq '[.[] | select(.prerelease==false) | .assets[] | select(.name|endswith(".apk")) | .browser_download_url][0] // empty')
             if [ -n "$URL" ] && curl -fsSL -o "apps/$P.apk" "$URL"; then echo "$P: $(basename "$URL") $(du -h apps/$P.apk | cut -f1)"; else echo "::warning::$P could not be downloaded"; fi
           done
 
@@ -230,7 +231,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/out"
           ARGS=""
-          for P in org.fossify.calculator org.telegram.messenger; do [ -f "apps/$P.apk" ] && ARGS="$ARGS $P=apps/$P.apk"; done
+          for f in apps/*.apk; do [ -f "$f" ] && ARGS="$ARGS $f"; done
           bash e2e/ui-tour.sh e2e/app.apk "$RUNNER_TEMP/out/ui-tour" $ARGS > "$RUNNER_TEMP/out/tour_console.txt" 2>&1 || true
           { echo "### UI tour"; echo '```'; cat "$RUNNER_TEMP/out/ui-tour/notes.txt" 2>/dev/null | cut -c1-200; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
           docker stop android >/dev/null 2>&1 || true
