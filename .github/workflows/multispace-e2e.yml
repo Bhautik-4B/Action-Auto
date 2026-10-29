@@ -98,7 +98,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/e2e"
           cp app/build/outputs/apk/debug/*universal*.apk "$RUNNER_TEMP/e2e/app.apk"
           cp testing/guest-app/build/outputs/apk/debug/*.apk "$RUNNER_TEMP/e2e/guest.apk"
-          cp scripts/ci/e2e.sh scripts/ci/save-results.sh "$RUNNER_TEMP/e2e/"
+          cp scripts/ci/e2e.sh scripts/ci/ui-tour.sh scripts/ci/save-results.sh "$RUNNER_TEMP/e2e/"
 
       # Kept inside this run only (deleted after 1 day); the private repo's release has the real builds.
       - uses: actions/upload-artifact@v4
@@ -175,3 +175,63 @@ jobs:
       - name: Fail if the test failed
         if: always()
         run: test ! -e "$RUNNER_TEMP/out/FAILED" && test ! -e "$RUNNER_TEMP/out/boot_failure.txt"
+
+  # Human review: installs real open-source apps from F-Droid, clones them, opens the copies
+  # and screenshots every screen of the app. Screens go to the results branch of the private
+  # repo (runs/<time>-multispace-ui-tour-run<id>/ui-tour/*.png).
+  ui-tour:
+    name: UI tour (screenshots)
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    continue-on-error: true
+    env:
+      ANDROID_SERIAL: localhost:6000
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: multispace-e2e-files
+          path: e2e
+
+      - name: Download real apps from F-Droid (open source)
+        run: |
+          mkdir -p apps
+          for P in org.fossify.calculator org.telegram.messenger; do
+            VC=$(curl -fsS "https://f-droid.org/api/v1/packages/$P" | jq -r '.packages[0].versionCode')
+            curl -fsSL -o "apps/$P.apk" "https://f-droid.org/repo/${P}_${VC}.apk" && echo "$P version code $VC: $(du -h apps/$P.apk | cut -f1)" || echo "::warning::$P could not be downloaded"
+          done
+
+      - name: Start Android (Redroid, arm64)
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          sudo apt-get update -qq >/dev/null
+          sudo apt-get install -y -qq adb "linux-modules-extra-$(uname -r)" >/dev/null 2>&1 || sudo apt-get install -y -qq adb >/dev/null
+          sudo modprobe binder_linux devices="binder,hwbinder,vndbinder" || { echo "::error::binder kernel module not available on this runner"; exit 1; }
+          sudo modprobe ashmem_linux 2>/dev/null || true
+          docker pull -q redroid/redroid:11.0.0-latest >/dev/null
+          docker run -d --name android --privileged --memory=6g --cpus=4 \
+            -p 6000:5555 redroid/redroid:11.0.0-latest androidboot.redroid_gpu_mode=guest androidboot.use_memfd=true \
+            androidboot.redroid_width=1080 androidboot.redroid_height=2280 androidboot.redroid_dpi=420
+          for i in $(seq 1 84); do adb connect localhost:6000 >/dev/null 2>&1; [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] && break; sleep 5; done
+          if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" != 1 ]; then
+            # Diagnostics go to the results branch (the runner's own log is not readable from everywhere).
+            { echo "== docker ps"; docker ps -a; echo "== adb devices"; adb devices; echo "== getprop"; adb shell getprop 2>&1 | head -40;
+              echo "== docker logs"; docker logs android 2>&1 | tail -200; echo "== dmesg"; sudo dmesg 2>/dev/null | tail -60; } > "$RUNNER_TEMP/out/boot_failure.txt"
+            echo "::error::Android did not boot in 7 minutes (see boot_failure.txt in the results)"; exit 1
+          fi
+          echo "Android $(adb shell getprop ro.build.version.release | tr -d '\r') booted, abis: $(adb shell getprop ro.product.cpu.abilist | tr -d '\r')"
+
+      - name: Run the UI tour
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          ARGS=""
+          for P in org.fossify.calculator org.telegram.messenger; do [ -f "apps/$P.apk" ] && ARGS="$ARGS $P=apps/$P.apk"; done
+          bash e2e/ui-tour.sh e2e/app.apk "$RUNNER_TEMP/out/ui-tour" $ARGS > "$RUNNER_TEMP/out/tour_console.txt" 2>&1 || true
+          { echo "### UI tour"; echo '```'; cat "$RUNNER_TEMP/out/ui-tour/notes.txt" 2>/dev/null | cut -c1-200; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+          docker stop android >/dev/null 2>&1 || true
+
+      - name: Save screenshots to private repo (branch "results")
+        if: always()
+        env:
+          TOKEN: ${{ secrets[needs.build.outputs.token] }}
+        run: bash e2e/save-results.sh "$RUNNER_TEMP/out" ui-tour | tee -a "$GITHUB_STEP_SUMMARY"
