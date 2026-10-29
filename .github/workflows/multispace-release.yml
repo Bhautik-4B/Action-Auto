@@ -159,4 +159,10 @@ jobs:
               --notes "4bTech Space $VERSION_NAME (code $VERSION_CODE). Phones running an older version update to this one by themselves."
           fi
           echo "Update release: https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" | tee -a "$GITHUB_STEP_SUMMARY"
+          # The public download page: the versioned file plus 4bTech-Space.apk (always the newest).
+          gh release view APK --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create APK --repo "$GITHUB_REPOSITORY" --title "4bTech Space - download" --notes "4bTech-Space.apk is always the newest version; older versions are kept by name."
+          gh release upload APK "$APK" "$RUNNER_TEMP/4bTech-Space.apk" --repo "$GITHUB_REPOSITORY" --clobber
+          echo "Public download: https://github.com/$GITHUB_REPOSITORY/releases/download/APK/4bTech-Space-$VERSION_NAME.apk" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Public latest:   https://github.com/$GITHUB_REPOSITORY/releases/download/APK/4bTech-Space.apk" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "Latest:   https://github.com/$DOWNLOAD_REPO/releases/download/APK/4bTech-Space.apk" | tee -a "$GITHUB_STEP_SUMMARY"
