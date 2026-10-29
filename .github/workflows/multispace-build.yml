@@ -1,0 +1,123 @@
+name: MultiSpace - build and unit tests
+
+# Builds 4B Multi Space from the PRIVATE repo 4BornGithub/4b-multi-space (reached with the
+# MULTISPACE_REPO_TOKEN secret, or PRIVATE_REPO_TOKEN if that one also covers it) and runs
+# the unit tests. Nothing private is printed here beyond compile-error lines: the full log,
+# the test reports and the APK list go to branch "results" of the private repo, folder
+# runs/<time>-multispace-build-run<id>; the APKs go to the private repo's release
+# "multispace-ci-<branch>". Runs when this file changes, or by hand ("Run workflow").
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch of the private repo to build"
+        required: false
+        default: "main"
+  push:
+    paths:
+      - .github/workflows/multispace-build.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multispace-build-${{ inputs.ref || 'main' }}
+  cancel-in-progress: true
+
+env:
+  PRIVATE_REPO: 4BornGithub/4b-multi-space
+  PRIVATE_REF: ${{ inputs.ref || 'main' }}
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout private repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          ref: ${{ env.PRIVATE_REF }}
+          token: ${{ secrets.MULTISPACE_REPO_TOKEN || secrets.PRIVATE_REPO_TOKEN }}
+          path: private
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+
+      - name: Android SDK parts (platform 35, NDK of the engine)
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;29.0.13846066" >/dev/null
+
+      # Full output goes to a file (saved to the private repo); only error lines are shown here.
+      - name: Build and unit tests
+        working-directory: private
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          if gradle --no-daemon --console=plain --continue \
+               -PversionCode=$GITHUB_RUN_NUMBER -PversionName=0.1.$GITHUB_RUN_NUMBER \
+               test :app:assembleDebug :app:assembleRelease :testing:guest-app:assembleDebug \
+               >"$RUNNER_TEMP/out/build_log.txt" 2>&1; then
+            echo "BUILD=ok" >> "$GITHUB_ENV"
+          else
+            echo "BUILD=failed" >> "$GITHUB_ENV"
+            grep -E "^e: |error:|What went wrong|FAILED|Could not" -A3 "$RUNNER_TEMP/out/build_log.txt" | head -120
+          fi
+
+      - name: Summary
+        if: always()
+        working-directory: private
+        run: |
+          OUT="$RUNNER_TEMP/out"
+          find . -path '*/build/outputs/apk/*' -name '*.apk' -exec ls -l {} \; | awk '{print $5, $9}' > "$OUT/apks.txt" || true
+          mkdir -p "$OUT/test-results"
+          for d in $(find . -path '*/build/test-results' -type d); do cp -r "$d" "$OUT/test-results/$(echo "$d" | cut -d/ -f2- | tr / _)"; done
+          XML=$(find "$OUT/test-results" -name 'TEST-*.xml')
+          TESTS=$( [ -n "$XML" ] && grep -ho '<testsuite [^>]*tests="[0-9]*"' $XML | grep -o 'tests="[0-9]*"' | grep -o '[0-9]*' | awk '{s+=$1} END {print s+0}' || echo 0)
+          FAILS=$( [ -n "$XML" ] && grep -ho '<testsuite [^>]*failures="[0-9]*"' $XML | grep -o 'failures="[0-9]*"' | grep -o '[0-9]*' | awk '{s+=$1} END {print s+0}' || echo 0)
+          {
+            echo "### 4B Multi Space build: ${BUILD:-failed}"
+            echo "Branch $PRIVATE_REF, commit $(git rev-parse --short HEAD), version 0.1.$GITHUB_RUN_NUMBER"
+            echo "Unit tests: ${TESTS:-0} run, ${FAILS:-0} failed"
+            echo '```'; awk '{printf "%6.1f MB  %s\n", $1/1048576, $2}' "$OUT/apks.txt"; echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "FAILS=${FAILS:-0}" >> "$GITHUB_ENV"
+
+      - name: APKs to the private repo's release
+        if: env.BUILD == 'ok'
+        env:
+          GH_TOKEN: ${{ secrets.MULTISPACE_REPO_TOKEN || secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          TAG="multispace-ci-${PRIVATE_REF//\//-}"
+          mkdir -p "$RUNNER_TEMP/rel"
+          for f in $(find private -path '*/build/outputs/apk/*' -name '*.apk'); do
+            cp "$f" "$RUNNER_TEMP/rel/$(basename "${f%.apk}")-0.1.$GITHUB_RUN_NUMBER.apk"
+          done
+          gh release view "$TAG" --repo "$PRIVATE_REPO" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$PRIVATE_REPO" --prerelease --target "$PRIVATE_REF" \
+                 --title "CI builds ($PRIVATE_REF)" --notes "Latest CI build of branch $PRIVATE_REF (debug, release signed with the debug key unless a release key is set, and the e2e guest app)."
+          for a in $(gh release view "$TAG" --repo "$PRIVATE_REPO" --json assets --jq '.assets[].name'); do
+            gh release delete-asset "$TAG" "$a" --repo "$PRIVATE_REPO" --yes >/dev/null
+          done
+          gh release upload "$TAG" "$RUNNER_TEMP"/rel/*.apk --repo "$PRIVATE_REPO" --clobber
+          echo "APKs: release $TAG of the private repo" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Save results to private repo (branch "results")
+        if: always()
+        env:
+          TOKEN: ${{ secrets.MULTISPACE_REPO_TOKEN || secrets.PRIVATE_REPO_TOKEN }}
+        run: bash private/scripts/ci/save-results.sh "$RUNNER_TEMP/out" build | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail on errors
+        if: always()
+        run: |
+          [ "$BUILD" = ok ] || { echo "::error::build failed (log in the private repo, branch results)"; exit 1; }
+          [ "${FAILS:-0}" = 0 ] || { echo "::error::$FAILS unit test(s) failed"; exit 1; }

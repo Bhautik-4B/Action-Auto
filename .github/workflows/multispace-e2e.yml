@@ -1,0 +1,116 @@
+name: MultiSpace - emulator end-to-end
+
+# Builds 4B Multi Space (debug) and its e2e guest app from the PRIVATE repo
+# 4BornGithub/4b-multi-space and runs scripts/ci/e2e.sh on emulators shaped like low-end,
+# mid and high-end phones: the guest app is cloned 3 times in the virtual engine and every
+# copy must start fresh, with its own data and its own Android ID.
+# Emulators are x86_64 and run the ARM engine through the image's ARM translation (Android
+# 11 images have it; newer ones are marked experimental). Android 7-10 need real phones.
+# Screenshots, logcat and summary go to branch "results" of the private repo, folder
+# runs/<time>-multispace-e2e-<device>-run<id>; only PASS/FAIL lines are printed here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch of the private repo"
+        required: false
+        default: "main"
+  push:
+    paths:
+      - .github/workflows/multispace-e2e.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multispace-e2e-${{ inputs.ref || 'main' }}
+  cancel-in-progress: true
+
+env:
+  PRIVATE_REPO: 4BornGithub/4b-multi-space
+  PRIVATE_REF: ${{ inputs.ref || 'main' }}
+
+jobs:
+  e2e:
+    name: ${{ matrix.device }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { device: android11-low-2gb,  api: 30, target: google_apis,           ram: 2048M, profile: "Nexus 5",  experimental: false }
+          - { device: android11-high-6gb, api: 30, target: google_apis,           ram: 6144M, profile: pixel_4,    experimental: false }
+          - { device: android13-mid-4gb,  api: 33, target: google_apis_playstore, ram: 4096M, profile: pixel_4,    experimental: true }
+          - { device: android15-high-6gb, api: 35, target: google_apis_playstore, ram: 6144M, profile: pixel_6,    experimental: true }
+    steps:
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Checkout private repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          ref: ${{ env.PRIVATE_REF }}
+          token: ${{ secrets.MULTISPACE_REPO_TOKEN || secrets.PRIVATE_REPO_TOKEN }}
+          path: private
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+
+      - name: Build app and guest (debug)
+        working-directory: private
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;29.0.13846066" >/dev/null
+          if ! gradle --no-daemon --console=plain :app:assembleDebug :testing:guest-app:assembleDebug >"$RUNNER_TEMP/out/build_log.txt" 2>&1; then
+            grep -E "^e: |error:|What went wrong" -A3 "$RUNNER_TEMP/out/build_log.txt" | head -60
+            exit 1
+          fi
+          echo "APP_APK=$PWD/$(ls app/build/outputs/apk/debug/*universal*.apk | head -1)" >> "$GITHUB_ENV"
+          echo "GUEST_APK=$PWD/$(ls testing/guest-app/build/outputs/apk/debug/*.apk | head -1)" >> "$GITHUB_ENV"
+
+      - name: Test on the emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: ${{ matrix.target }}
+          arch: x86_64
+          profile: ${{ matrix.profile }}
+          ram-size: ${{ matrix.ram }}
+          cores: 2
+          disk-size: 6G
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save
+          disable-animations: true
+          script: bash private/scripts/ci/e2e.sh "$APP_APK" "$GUEST_APK" "$RUNNER_TEMP/out/${{ matrix.device }}" full > "$RUNNER_TEMP/out/e2e_console.txt" 2>&1 || touch "$RUNNER_TEMP/out/FAILED"
+
+      - name: Result
+        if: always()
+        run: |
+          S="$RUNNER_TEMP/out/${{ matrix.device }}/summary.txt"
+          { echo "### ${{ matrix.device }}"; echo '```'; grep -E "^(PASS|FAIL|== result)" "$S" 2>/dev/null || echo "no summary (see results)"; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Save results to private repo (branch "results")
+        if: always()
+        env:
+          TOKEN: ${{ secrets.MULTISPACE_REPO_TOKEN || secrets.PRIVATE_REPO_TOKEN }}
+        run: bash private/scripts/ci/save-results.sh "$RUNNER_TEMP/out" "e2e-${{ matrix.device }}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if the test failed
+        if: always()
+        run: test ! -e "$RUNNER_TEMP/out/FAILED" && test -n "$APP_APK"
