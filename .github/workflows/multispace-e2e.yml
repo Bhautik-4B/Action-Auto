@@ -171,7 +171,7 @@ jobs:
         if: always()
         env:
           TOKEN: ${{ secrets[needs.build.outputs.token] }}
-        run: bash e2e/save-results.sh "$RUNNER_TEMP/out" "e2e-${{ matrix.device }}" | tee -a "$GITHUB_STEP_SUMMARY"
+        run: set -o pipefail; bash e2e/save-results.sh "$RUNNER_TEMP/out" "e2e-${{ matrix.device }}" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Fail if the test failed
         if: always()

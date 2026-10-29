@@ -111,4 +111,4 @@ jobs:
         if: always()
         env:
           TOKEN: ${{ secrets[needs.build.outputs.token] }}
-        run: bash x/save-results.sh "$RUNNER_TEMP/out" experiment | tee -a "$GITHUB_STEP_SUMMARY"
+        run: set -o pipefail; bash x/save-results.sh "$RUNNER_TEMP/out" experiment | tee -a "$GITHUB_STEP_SUMMARY"
