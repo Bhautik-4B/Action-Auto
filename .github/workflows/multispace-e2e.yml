@@ -193,12 +193,17 @@ jobs:
           name: multispace-e2e-files
           path: e2e
 
-      - name: Download real apps from F-Droid (open source)
+      - name: Download real apps (open-source releases on GitHub)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p apps
-          for P in org.fossify.calculator org.telegram.messenger; do
-            VC=$(curl -fsS "https://f-droid.org/api/v1/packages/$P" | jq -r '.packages[0].versionCode')
-            curl -fsSL -o "apps/$P.apk" "https://f-droid.org/repo/${P}_${VC}.apk" && echo "$P version code $VC: $(du -h apps/$P.apk | cut -f1)" || echo "::warning::$P could not be downloaded"
+          # <package>|<github repo>|<asset name filter>: the release APK of each open-source app.
+          for spec in "org.fossify.calculator|FossifyOrg/Calculator|foss" "org.telegram.messenger|Telegram-FOSS-Team/Telegram-FOSS|arm64"; do
+            P=${spec%%|*}; R=$(echo "$spec" | cut -d'|' -f2); F=${spec##*|}
+            URL=$(gh api "repos/$R/releases/latest" --jq ".assets[] | select(.name|endswith(\".apk\")) | select(.name|test(\"$F\")) | .browser_download_url" | head -1)
+            [ -n "$URL" ] || URL=$(gh api "repos/$R/releases/latest" --jq '.assets[] | select(.name|endswith(".apk")) | .browser_download_url' | head -1)
+            if [ -n "$URL" ] && curl -fsSL -o "apps/$P.apk" "$URL"; then echo "$P: $(basename "$URL") $(du -h apps/$P.apk | cut -f1)"; else echo "::warning::$P could not be downloaded"; fi
           done
 
       - name: Start Android (Redroid, arm64)
