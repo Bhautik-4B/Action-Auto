@@ -41,10 +41,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { device: android11-low-2gb,  api: 30, target: google_apis,           ram: 2048M, profile: "Nexus 5",  experimental: false }
-          - { device: android11-high-6gb, api: 30, target: google_apis,           ram: 6144M, profile: pixel_4,    experimental: false }
-          - { device: android13-mid-4gb,  api: 33, target: google_apis_playstore, ram: 4096M, profile: pixel_4,    experimental: true }
-          - { device: android15-high-6gb, api: 35, target: google_apis_playstore, ram: 6144M, profile: pixel_6,    experimental: true }
+          - { device: android11-low-2gb,  api: 30, target: google_apis,           ram: 2048M, cores: 2, profile: "Nexus 5",  experimental: false }
+          - { device: android11-high-6gb, api: 30, target: google_apis,           ram: 6144M, cores: 4, profile: pixel_4,    experimental: false }
+          - { device: android13-mid-4gb,  api: 33, target: google_apis_playstore, ram: 4096M, cores: 4, profile: pixel_4,    experimental: true }
+          - { device: android15-high-6gb, api: 35, target: google_apis_playstore, ram: 6144M, cores: 4, profile: pixel_6,    experimental: true }
     steps:
       - name: Free disk space
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
@@ -121,7 +121,7 @@ jobs:
           arch: x86_64
           profile: ${{ matrix.profile }}
           ram-size: ${{ matrix.ram }}
-          cores: 2
+          cores: ${{ matrix.cores }}
           disk-size: 6G
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save
           disable-animations: true
