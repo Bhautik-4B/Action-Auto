@@ -24,6 +24,10 @@ on:
         description: "Branch of the private repo"
         required: false
         default: "main"
+      image:
+        description: "Docker image instead of redroid/redroid:<android>-latest (e.g. lwch/redroid-gapps:13.0.0-latest for Google services)"
+        required: false
+        default: ""
   push:
     paths:
       - .github/workflows/multispace-app-test.yml
@@ -39,6 +43,7 @@ env:
   COUNT: ${{ inputs.count || '4' }}
   ANDROID: ${{ inputs.android || '11.0.0' }}
   REF: ${{ inputs.ref || 'main' }}
+  IMAGE: ${{ inputs.image || '' }}
 
 jobs:
   build:
@@ -114,15 +119,16 @@ jobs:
           sudo apt-get install -y -qq adb "linux-modules-extra-$(uname -r)" >/dev/null 2>&1 || sudo apt-get install -y -qq adb >/dev/null
           sudo modprobe binder_linux devices="binder,hwbinder,vndbinder"
           sudo modprobe ashmem_linux 2>/dev/null || true
-          docker pull -q "redroid/redroid:$ANDROID-latest" >/dev/null
-          docker run -d --name android --privileged --memory=6g --cpus=4 -p 6000:5555 "redroid/redroid:$ANDROID-latest" \
+          IMG="${IMAGE:-redroid/redroid:$ANDROID-latest}"; echo "image: $IMG"
+          docker pull -q "$IMG" >/dev/null
+          docker run -d --name android --privileged --memory=6g --cpus=4 -p 6000:5555 "$IMG" \
             androidboot.redroid_gpu_mode=guest androidboot.use_memfd=true androidboot.redroid_width=1080 androidboot.redroid_height=2280 androidboot.redroid_dpi=420
           for i in $(seq 1 84); do adb connect localhost:6000 >/dev/null 2>&1; [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] && break; sleep 5; done
           [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] || { docker logs android 2>&1 | tail -100 > "$RUNNER_TEMP/out/boot_failure.txt"; echo "::error::Android did not boot"; exit 1; }
       - name: Test the app in clones
         run: |
           bash x/app-test.sh x/app.apk x/test.apk "$RUNNER_TEMP/out/app-test" "$COUNT" > "$RUNNER_TEMP/out/console.txt" 2>&1; RC=$?
-          { echo "### $ASSET in 4bTech Space, Android $ANDROID"; echo '```'; cut -c1-220 "$RUNNER_TEMP/out/app-test/notes.txt"; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+          { echo "### $ASSET in 4bTech Space, Android $ANDROID ${IMAGE:+($IMAGE)}"; echo '```'; cut -c1-220 "$RUNNER_TEMP/out/app-test/notes.txt"; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
           docker stop android >/dev/null 2>&1 || true
           echo "RC=$RC" >> "$GITHUB_ENV"
       - name: Save results to private repo (branch "results")
