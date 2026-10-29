@@ -130,19 +130,26 @@ jobs:
 
       - name: Start Android (Redroid, arm64)
         run: |
+          mkdir -p "$RUNNER_TEMP/out"
           sudo apt-get update -qq >/dev/null
           sudo apt-get install -y -qq adb "linux-modules-extra-$(uname -r)" >/dev/null 2>&1 || sudo apt-get install -y -qq adb >/dev/null
           sudo modprobe binder_linux devices="binder,hwbinder,vndbinder" || { echo "::error::binder kernel module not available on this runner"; exit 1; }
           sudo modprobe ashmem_linux 2>/dev/null || true
+          docker pull -q ${{ matrix.image }} >/dev/null
           docker run -d --name android --privileged --memory=${{ matrix.memory }} --cpus=${{ matrix.cpus }} \
-            -p 5555:5555 ${{ matrix.image }} androidboot.redroid_gpu_mode=guest androidboot.redroid_width=1080 androidboot.redroid_height=2280 androidboot.redroid_dpi=420
-          for i in $(seq 1 60); do adb connect localhost:5555 >/dev/null 2>&1; [ "$(adb -s localhost:5555 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] && break; sleep 5; done
-          [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] || { echo "::error::Android did not boot in 5 minutes"; docker logs android | tail -40; exit 1; }
+            -p 5555:5555 ${{ matrix.image }} androidboot.redroid_gpu_mode=guest androidboot.use_memfd=true \
+            androidboot.redroid_width=1080 androidboot.redroid_height=2280 androidboot.redroid_dpi=420
+          for i in $(seq 1 84); do adb connect localhost:5555 >/dev/null 2>&1; [ "$(adb -s localhost:5555 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] && break; sleep 5; done
+          if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" != 1 ]; then
+            # Diagnostics go to the results branch (the runner's own log is not readable from everywhere).
+            { echo "== docker ps"; docker ps -a; echo "== adb devices"; adb devices; echo "== getprop"; adb shell getprop 2>&1 | head -40;
+              echo "== docker logs"; docker logs android 2>&1 | tail -200; echo "== dmesg"; sudo dmesg 2>/dev/null | tail -60; } > "$RUNNER_TEMP/out/boot_failure.txt"
+            echo "::error::Android did not boot in 7 minutes (see boot_failure.txt in the results)"; exit 1
+          fi
           echo "Android $(adb shell getprop ro.build.version.release | tr -d '\r') booted, abis: $(adb shell getprop ro.product.cpu.abilist | tr -d '\r')"
 
       - name: Run the e2e test
         run: |
-          mkdir -p "$RUNNER_TEMP/out"
           bash e2e/e2e.sh e2e/app.apk e2e/guest.apk "$RUNNER_TEMP/out/${{ matrix.device }}" full > "$RUNNER_TEMP/out/e2e_console.txt" 2>&1 || touch "$RUNNER_TEMP/out/FAILED"
           docker logs android > "$RUNNER_TEMP/out/redroid_log.txt" 2>&1 || true
           docker stop android >/dev/null 2>&1 || true
@@ -161,4 +168,4 @@ jobs:
 
       - name: Fail if the test failed
         if: always()
-        run: test ! -e "$RUNNER_TEMP/out/FAILED"
+        run: test ! -e "$RUNNER_TEMP/out/FAILED" && test ! -e "$RUNNER_TEMP/out/boot_failure.txt"
