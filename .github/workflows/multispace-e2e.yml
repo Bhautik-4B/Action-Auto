@@ -113,6 +113,9 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
     continue-on-error: ${{ matrix.experimental }}
+    env:
+      # adb auto-scans port 5555 as "emulator-5554" and would then see the container twice.
+      ANDROID_SERIAL: localhost:6000
     strategy:
       fail-fast: false
       matrix:
@@ -137,9 +140,9 @@ jobs:
           sudo modprobe ashmem_linux 2>/dev/null || true
           docker pull -q ${{ matrix.image }} >/dev/null
           docker run -d --name android --privileged --memory=${{ matrix.memory }} --cpus=${{ matrix.cpus }} \
-            -p 5555:5555 ${{ matrix.image }} androidboot.redroid_gpu_mode=guest androidboot.use_memfd=true \
+            -p 6000:5555 ${{ matrix.image }} androidboot.redroid_gpu_mode=guest androidboot.use_memfd=true \
             androidboot.redroid_width=1080 androidboot.redroid_height=2280 androidboot.redroid_dpi=420
-          for i in $(seq 1 84); do adb connect localhost:5555 >/dev/null 2>&1; [ "$(adb -s localhost:5555 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] && break; sleep 5; done
+          for i in $(seq 1 84); do adb connect localhost:6000 >/dev/null 2>&1; [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] && break; sleep 5; done
           if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" != 1 ]; then
             # Diagnostics go to the results branch (the runner's own log is not readable from everywhere).
             { echo "== docker ps"; docker ps -a; echo "== adb devices"; adb devices; echo "== getprop"; adb shell getprop 2>&1 | head -40;
