@@ -207,6 +207,15 @@ jobs:
             if [ -n "$URL" ] && curl -fsSL -o "apps/$P.apk" "$URL"; then echo "$P: $(basename "$URL") $(du -h apps/$P.apk | cut -f1)"; else echo "::warning::$P could not be downloaded"; fi
           done
 
+      # The user's own app (release "APK" of the private repo Bhautik-4B/Game-Auto).
+      - name: Download 4B-Rummy-Home (private release)
+        env:
+          GH_TOKEN: ${{ secrets[needs.build.outputs.token] }}
+        run: |
+          gh release download APK --repo Bhautik-4B/Game-Auto --pattern base.apk --dir "$RUNNER_TEMP/game" \
+            && mv "$RUNNER_TEMP/game/base.apk" apps/4b-rummy-home.apk && echo "4B-Rummy-Home: $(du -h apps/4b-rummy-home.apk | cut -f1)" \
+            || echo "::warning::4B-Rummy-Home could not be downloaded with the chosen token"
+
       - name: Start Android (Redroid, arm64)
         run: |
           mkdir -p "$RUNNER_TEMP/out"
