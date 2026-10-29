@@ -24,7 +24,7 @@ on:
       - .github/workflows/multispace-release.yml
 
 permissions:
-  contents: read
+  contents: write   # the public release (tag space-v<version>) that phones update from
 
 concurrency:
   group: multispace-release
@@ -79,9 +79,16 @@ jobs:
           WANT: ${{ inputs.version }}
         run: |
           if [ -n "$WANT" ]; then NAME="$WANT"; else NAME="0.9.$GITHUB_RUN_NUMBER"; fi
+          # Version code = major*10000 + minor*100 + patch, the same formula the app's updater
+          # reads from the release tag space-v<version>; it must grow with every release.
+          if [[ "$NAME" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            CODE=$(( ${BASH_REMATCH[1]} * 10000 + ${BASH_REMATCH[2]} * 100 + ${BASH_REMATCH[3]} ))
+          else
+            echo "::error::version must be <major>.<minor>.<patch>, got '$NAME'"; exit 1
+          fi
           echo "VERSION_NAME=$NAME" >> "$GITHUB_ENV"
-          echo "VERSION_CODE=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
-          echo "Version $NAME (code $GITHUB_RUN_NUMBER)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "VERSION_CODE=$CODE" >> "$GITHUB_ENV"
+          echo "Version $NAME (code $CODE)" | tee -a "$GITHUB_STEP_SUMMARY"
 
       # The real key is used only if all four secrets are set; the files never leave the runner.
       - name: Release key from secrets (if set)
@@ -137,4 +144,19 @@ jobs:
             || gh release create multispace-release --repo "$PRIVATE_REPO" --title "4bTech Space releases" --notes "Every release APK, newest last."
           gh release upload multispace-release "$APK" --repo "$PRIVATE_REPO" --clobber
           echo "Download: https://github.com/$DOWNLOAD_REPO/releases/download/APK/4bTech-Space-$VERSION_NAME.apk" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Phones update from here: this repo is public, so the app can read the release list and
+      # download the APK without any token. Tag space-v<version>; one versioned APK per release.
+      - name: Publish the public release the app updates from (tag space-v${{ env.VERSION_NAME }})
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="space-v$VERSION_NAME"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" --title "4bTech Space $VERSION_NAME" \
+              --notes "4bTech Space $VERSION_NAME (code $VERSION_CODE). Phones running an older version update to this one by themselves."
+          fi
+          echo "Update release: https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "Latest:   https://github.com/$DOWNLOAD_REPO/releases/download/APK/4bTech-Space.apk" | tee -a "$GITHUB_STEP_SUMMARY"
