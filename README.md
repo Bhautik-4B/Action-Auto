@@ -8,9 +8,9 @@ Workflow: **Android Phase 1 - Guest to Lobby** (`.github/workflows/android-phase
 ## 4B Multi Space
 
 Code: private repo `4BornGithub/4b-multi-space` (all code, no workflows). The workflows
-here build and test it; they read it with the `MULTISPACE_REPO_TOKEN` secret (a fine-grained
-token with *Contents: read and write* on that repo; `PRIVATE_REPO_TOKEN` is used when the
-first one is not set). Logs, screenshots and test reports go to branch `results` of the
+here build and test it. They use the first of the secrets `MULTISPACE_REPO_TOKEN`,
+`PRIVATE_REPO_TOKEN`, `PROJECTS_TOKEN` that can read that repo (one with write access is
+preferred); the step "Pick a token" lists which secret can do what. Logs, screenshots and test reports go to branch `results` of the
 private repo, APKs to its release `multispace-ci-<branch>`.
 
 - **MultiSpace - build and unit tests** (`multispace-build.yml`): compiles all modules,

@@ -55,12 +55,40 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      # Tries each token secret (only names are printed) and uses the first one that can
+      # read the private repo, preferring one that can also write (results, releases).
+      - name: Pick a token for the private repo
+        id: token
+        env:
+          MULTISPACE_REPO_TOKEN: ${{ secrets.MULTISPACE_REPO_TOKEN }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          PROJECTS_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+        run: |
+          READ=""; WRITE=""
+          for n in MULTISPACE_REPO_TOKEN PRIVATE_REPO_TOKEN PROJECTS_TOKEN; do
+            v="${!n}"
+            if [ -z "$v" ]; then echo "$n: not set"; continue; fi
+            if git ls-remote "https://x-access-token:$v@github.com/$PRIVATE_REPO.git" HEAD >/dev/null 2>&1; then
+              P="$(curl -fsS -H "Authorization: Bearer $v" "https://api.github.com/repos/$PRIVATE_REPO" | jq -r '.permissions.push // "unknown"')"
+              echo "$n: can read $PRIVATE_REPO (write: $P)"
+              [ -n "$READ" ] || READ=$n
+              [ "$P" != true ] || [ -n "$WRITE" ] || WRITE=$n
+            else
+              echo "$n: no access to $PRIVATE_REPO"
+            fi
+          done
+          PICK="${WRITE:-$READ}"
+          [ -n "$PICK" ] || { echo "::error::No token secret can read $PRIVATE_REPO. Add MULTISPACE_REPO_TOKEN (fine-grained, Contents read+write on that repo)."; exit 1; }
+          [ -n "$WRITE" ] || echo "::warning::$PICK can only read: results and APKs cannot be saved to $PRIVATE_REPO"
+          echo "Using $PICK" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "name=$PICK" >> "$GITHUB_OUTPUT"
+
       - name: Checkout private repo
         uses: actions/checkout@v4
         with:
           repository: ${{ env.PRIVATE_REPO }}
           ref: ${{ env.PRIVATE_REF }}
-          token: ${{ secrets.MULTISPACE_REPO_TOKEN || secrets.PRIVATE_REPO_TOKEN }}
+          token: ${{ secrets[steps.token.outputs.name] }}
           path: private
 
       - uses: actions/setup-java@v4
@@ -108,7 +136,7 @@ jobs:
       - name: Save results to private repo (branch "results")
         if: always()
         env:
-          TOKEN: ${{ secrets.MULTISPACE_REPO_TOKEN || secrets.PRIVATE_REPO_TOKEN }}
+          TOKEN: ${{ secrets[steps.token.outputs.name] }}
         run: bash private/scripts/ci/save-results.sh "$RUNNER_TEMP/out" "e2e-${{ matrix.device }}" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Fail if the test failed
