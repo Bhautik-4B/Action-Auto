@@ -75,7 +75,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/x"
           cp app/build/outputs/apk/debug/*universal*.apk "$RUNNER_TEMP/x/app.apk"
           cp scripts/ci/warmup-experiment.sh scripts/ci/save-results.sh "$RUNNER_TEMP/x/"
-          cp scripts/ci/seed-verify.sh "$RUNNER_TEMP/x/" 2>/dev/null || true
+          cp scripts/ci/*.sh "$RUNNER_TEMP/x/"
       - name: The game (private release)
         env:
           GH_TOKEN: ${{ secrets[steps.token.outputs.name] }}
