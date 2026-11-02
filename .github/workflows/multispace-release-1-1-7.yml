@@ -1,0 +1,193 @@
+name: 4bTech Space - release 1.1.7 (1.1.5 may keep running)
+
+# Builds ONE universal release APK of 4bTech Space (arm64 + armv7 in one file, Android 8.1+)
+# from the PRIVATE repo 4BornGithub/4B-Multi-Space and uploads it as
+# 4bTech-Space-<version>.apk to release "APK" of Bhautik-4B/Game-Auto (the download page)
+# and to release "multispace-release" of the private repo (archive of every version).
+# Signing: the real key from the secrets MULTISPACE_KEYSTORE_B64 / MULTISPACE_KEYSTORE_PASSWORD /
+# MULTISPACE_KEY_ALIAS / MULTISPACE_KEY_PASSWORD when they exist, otherwise the test key kept in
+# the private repo (signing/README.md explains both).
+
+# One-off copy of multispace-release.yml (2 Nov 2026): 1.1.7 from main, and space-latest.json
+# with "minCode": 10105 so phones on 1.1.5 (whose old updater could not download 1.1.6 on some
+# networks) are offered the update without being locked. Runs once when this branch is pushed.
+on:
+  push:
+    branches: [claude/release-1.1.7]
+    paths: [.github/workflows/multispace-release-1-1-7.yml]
+
+permissions:
+  contents: write   # the public release (tag space-v<version>) that phones update from
+
+concurrency:
+  group: multispace-release
+  cancel-in-progress: false
+
+env:
+  PRIVATE_REPO: 4BornGithub/4B-Multi-Space
+  PRIVATE_REF: main
+  DOWNLOAD_REPO: Bhautik-4B/Game-Auto
+
+jobs:
+  release:
+    name: build and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Pick a token for the private repos
+        id: token
+        env:
+          MULTISPACE_REPO_TOKEN: ${{ secrets.MULTISPACE_REPO_TOKEN }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          PROJECTS_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+        run: |
+          for n in MULTISPACE_REPO_TOKEN PRIVATE_REPO_TOKEN PROJECTS_TOKEN; do
+            v="${!n}"; [ -n "$v" ] || continue
+            if git ls-remote "https://x-access-token:$v@github.com/$PRIVATE_REPO.git" HEAD >/dev/null 2>&1 \
+               && git ls-remote "https://x-access-token:$v@github.com/$DOWNLOAD_REPO.git" HEAD >/dev/null 2>&1; then
+              echo "Using $n" | tee -a "$GITHUB_STEP_SUMMARY"; echo "name=$n" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+          done
+          echo "::error::No token secret can read both $PRIVATE_REPO and $DOWNLOAD_REPO"; exit 1
+
+      - name: Checkout private repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          ref: ${{ env.PRIVATE_REF }}
+          token: ${{ secrets[steps.token.outputs.name] }}
+          path: private
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+
+      - name: Version
+        env:
+          WANT: "1.1.7"
+        run: |
+          if [ -n "$WANT" ]; then NAME="$WANT"; else NAME="0.9.$GITHUB_RUN_NUMBER"; fi
+          # Version code = major*10000 + minor*100 + patch, the same formula the app's updater
+          # reads from the release tag space-v<version>; it must grow with every release.
+          if [[ "$NAME" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            CODE=$(( ${BASH_REMATCH[1]} * 10000 + ${BASH_REMATCH[2]} * 100 + ${BASH_REMATCH[3]} ))
+          else
+            echo "::error::version must be <major>.<minor>.<patch>, got '$NAME'"; exit 1
+          fi
+          echo "VERSION_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=$CODE" >> "$GITHUB_ENV"
+          echo "Version $NAME (code $CODE)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # The real key is used only if all four secrets are set; the files never leave the runner.
+      - name: Release key from secrets (if set)
+        env:
+          KS_B64: ${{ secrets.MULTISPACE_KEYSTORE_B64 }}
+          KS_PASSWORD: ${{ secrets.MULTISPACE_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.MULTISPACE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.MULTISPACE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KS_B64" ] && [ -n "$KS_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            { echo "MULTISPACE_KEYSTORE=$RUNNER_TEMP/release.jks"; echo "MULTISPACE_KEYSTORE_PASSWORD=$KS_PASSWORD";
+              echo "MULTISPACE_KEY_ALIAS=$KEY_ALIAS"; echo "MULTISPACE_KEY_PASSWORD=$KEY_PASSWORD"; } >> "$GITHUB_ENV"
+            echo "Signing: release key from secrets" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Signing: TEST key from the private repo (not for real users; see signing/README.md)" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Build universal release APK
+        working-directory: private
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;29.0.13846066" >/dev/null
+          # A test build is marked (BuildConfig.QA): its update gate never blocks it. With the real
+          # release key, the app's anti-tamper check must know that key's certificate.
+          EXTRA=""
+          if [ "${{ inputs.qa }}" = "true" ]; then EXTRA="$EXTRA -Pqa=true"; fi
+          if [ -n "${MULTISPACE_KEYSTORE:-}" ]; then
+            CERT=$(keytool -list -v -keystore "$MULTISPACE_KEYSTORE" -storepass "$MULTISPACE_KEYSTORE_PASSWORD" -alias "$MULTISPACE_KEY_ALIAS" 2>/dev/null | grep -m1 'SHA256:' | sed 's/.*SHA256: *//; s/://g' | tr -d ' ')
+            [ ${#CERT} -eq 64 ] || { echo "::error::could not read the release certificate"; exit 1; }
+            EXTRA="$EXTRA -PexpectedCertSha256=$CERT"
+            echo "Release certificate SHA-256: $CERT (the bot app's SpaceApp.CERT_SHA256 must be the same)" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          if ! gradle --no-daemon --console=plain -PversionCode=$VERSION_CODE -PversionName=$VERSION_NAME $EXTRA :app:assembleRelease >"$RUNNER_TEMP/build_log.txt" 2>&1; then
+            grep -E "^e: |error:|What went wrong" -A3 "$RUNNER_TEMP/build_log.txt" | head -60; exit 1
+          fi
+          APK=$(ls app/build/outputs/apk/release/*universal*.apk | head -1)
+          OUT="$RUNNER_TEMP/4bTech-Space-$VERSION_NAME.apk"; cp "$APK" "$OUT"
+          echo "APK=$OUT" >> "$GITHUB_ENV"
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          { echo "### 4bTech-Space-$VERSION_NAME.apk"; echo '```'
+            echo "size: $(du -h "$OUT" | cut -f1)"; echo "sha256: $(sha256sum "$OUT" | cut -d' ' -f1)"
+            "$BT/apksigner" verify --print-certs "$OUT" | grep -E "Signer #1 certificate (DN|SHA-256)"
+            "$BT/aapt" dump badging "$OUT" | grep -E "^package:|sdkVersion|native-code" ; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Save the build log to the private repo (branch "results")
+        if: always()
+        env:
+          TOKEN: ${{ secrets[steps.token.outputs.name] }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/out" && cp "$RUNNER_TEMP/build_log.txt" "$RUNNER_TEMP/out/" 2>/dev/null || true
+          bash private/scripts/ci/save-results.sh "$RUNNER_TEMP/out" release | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # A test build: only a prerelease with its own tag (the app's updater reads space-latest.json
+      # and space-v<version> releases that are not prereleases: it never sees this one).
+      - name: Publish the test build (prerelease space-qa-v${{ env.VERSION_NAME }})
+        if: ${{ false }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="space-qa-v$VERSION_NAME"
+          QA="$RUNNER_TEMP/4bTech-Space-$VERSION_NAME-qa.apk"; cp "$APK" "$QA"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$QA" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "$QA" --repo "$GITHUB_REPOSITORY" --prerelease --title "4bTech Space $VERSION_NAME (test only)" \
+              --notes "Test build of 4bTech Space $VERSION_NAME from $PRIVATE_REF. Not for users: phones never update to it."
+          fi
+          echo "Test download: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/4bTech-Space-$VERSION_NAME-qa.apk" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload to the download release (Game-Auto, tag APK) and the private archive
+        if: ${{ true }}
+        env:
+          GH_TOKEN: ${{ secrets[steps.token.outputs.name] }}
+        run: |
+          gh release view APK --repo "$DOWNLOAD_REPO" >/dev/null 2>&1 || gh release create APK --repo "$DOWNLOAD_REPO" --title "APK" --notes "App downloads"
+          # One current file for phones: 4bTech-Space.apk (always the newest), plus the versioned file.
+          cp "$APK" "$RUNNER_TEMP/4bTech-Space.apk"
+          gh release upload APK "$APK" "$RUNNER_TEMP/4bTech-Space.apk" --repo "$DOWNLOAD_REPO" --clobber
+          gh release view multispace-release --repo "$PRIVATE_REPO" >/dev/null 2>&1 \
+            || gh release create multispace-release --repo "$PRIVATE_REPO" --title "4bTech Space releases" --notes "Every release APK, newest last."
+          gh release upload multispace-release "$APK" --repo "$PRIVATE_REPO" --clobber
+          echo "Download: https://github.com/$DOWNLOAD_REPO/releases/download/APK/4bTech-Space-$VERSION_NAME.apk" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Phones update from here: this repo is public, so the app can read the release list and
+      # download the APK without any token. Tag space-v<version>; one versioned APK per release.
+      - name: Publish the public release the app updates from (tag space-v${{ env.VERSION_NAME }})
+        if: ${{ true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="space-v$VERSION_NAME"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" --title "4bTech Space $VERSION_NAME" \
+              --notes "4bTech Space $VERSION_NAME (code $VERSION_CODE). Phones running an older version update to this one by themselves."
+          fi
+          echo "Update release: https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" | tee -a "$GITHUB_STEP_SUMMARY"
+          # The public download page: the versioned file plus 4bTech-Space.apk (always the newest).
+          gh release view APK --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create APK --repo "$GITHUB_REPOSITORY" --title "4bTech Space - download" --notes "4bTech-Space.apk is always the newest version; older versions are kept by name."
+          # What phones read first to learn the newest version (a plain download, no API limit).
+          printf '{"version":"%s","code":%s,"url":"https://github.com/%s/releases/download/%s/4bTech-Space-%s.apk","minCode":10105}\n' \
+            "$VERSION_NAME" "$VERSION_CODE" "$GITHUB_REPOSITORY" "$TAG" "$VERSION_NAME" > "$RUNNER_TEMP/space-latest.json"
+          gh release upload APK "$APK" "$RUNNER_TEMP/4bTech-Space.apk" "$RUNNER_TEMP/space-latest.json" --repo "$GITHUB_REPOSITORY" --clobber
+          echo "Public download: https://github.com/$GITHUB_REPOSITORY/releases/download/APK/4bTech-Space-$VERSION_NAME.apk" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Public latest:   https://github.com/$GITHUB_REPOSITORY/releases/download/APK/4bTech-Space.apk" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Latest:   https://github.com/$DOWNLOAD_REPO/releases/download/APK/4bTech-Space.apk" | tee -a "$GITHUB_STEP_SUMMARY"
