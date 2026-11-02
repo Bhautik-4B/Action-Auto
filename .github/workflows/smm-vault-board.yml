@@ -8,8 +8,6 @@ name: SMM Vault board
 # The format of requests.json is described at the top of .github/scripts/board_ops.py.
 # This repository is public: no card text is printed in this log, only counts.
 on:
-  push:   # TEMPORARY: test runs from this branch (read-only); removed before merging
-    branches: [smm-vault-board-sync]
   schedule:
     - cron: "47 */3 * * *"   # every 3 hours: copy of the board only
   workflow_dispatch:
