@@ -1,0 +1,126 @@
+name: SMM Vault board
+
+# Keeps the SMM Vault project board (users/4BornGithub/projects/34) in step with the work.
+# Requests (create / edit / status / assign / fields / comment / convert / archive cards) are
+# written to smm-vault/requests.json on branch "board" of the private repository; this
+# workflow applies them with the PROJECTS_TOKEN secret, then saves a copy of the board
+# (smm-vault/board.json, board.md) and the outcome (last-run.json, history.json) back there.
+# The format of requests.json is described at the top of .github/scripts/board_ops.py.
+# This repository is public: no card text is printed in this log, only counts.
+on:
+  schedule:
+    - cron: "47 */3 * * *"   # every 3 hours: copy of the board only
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Apply smm-vault/requests.json (private repository, branch board) before copying the board"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smm-vault-board
+  cancel-in-progress: false
+
+env:
+  PRIVATE_REPO: Bhautik-4B/Game-Auto
+  PRIVATE_BRANCH: board
+  DIR: smm-vault
+  BOARD_OWNER: 4BornGithub
+  BOARD_NUMBER: "34"
+  ISSUE_REPO: 4BornGithub/smm-vault_mech   # default repository when a draft card is converted to an issue
+
+jobs:
+  board:
+    name: apply requests and copy the board
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Check the secrets
+        env:
+          TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+          REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          [ -n "$TOKEN" ] || { echo "::error::The PROJECTS_TOKEN secret is missing"; exit 1; }
+          [ -n "$REPO_TOKEN" ] || { echo "::error::The PRIVATE_REPO_TOKEN secret is missing"; exit 1; }
+
+      - name: Get the requests
+        env:
+          REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch "$PRIVATE_BRANCH" "https://x-access-token:${REPO_TOKEN}@github.com/${PRIVATE_REPO}.git" "$RUNNER_TEMP/priv"
+          mkdir -p "$RUNNER_TEMP/priv/$DIR"
+          f="$RUNNER_TEMP/priv/$DIR/requests.json"
+          [ -f "$f" ] || echo "[]" > "$f"
+          cp "$f" "$RUNNER_TEMP/processed.json"
+          python3 -c "import json,sys; print('Requests waiting:', len(json.load(open(sys.argv[1]))))" "$f"
+
+      - name: Apply the requests and read the board
+        id: ops
+        env:
+          TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+          APPLY: ${{ github.event_name == 'workflow_dispatch' && inputs.apply }}
+        run: |
+          set +e
+          WORK_DIR="$RUNNER_TEMP/priv/$DIR" python3 .github/scripts/board_ops.py
+          rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          # 0 = all fine, 2 = some requests failed (files are still saved), anything else = no board read.
+          [ $rc -eq 0 ] || [ $rc -eq 2 ]
+
+      - name: Save into the private repository
+        env:
+          REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          APPLIED: ${{ github.event_name == 'workflow_dispatch' && inputs.apply }}
+        run: |
+          set -euo pipefail
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          OUT="$RUNNER_TEMP/priv/$DIR"
+          cat > "$RUNNER_TEMP/merge.py" <<'PY'
+          import json, os, sys
+          d, out, applied = sys.argv[1], sys.argv[2], sys.argv[3] == "true"
+          if not applied:
+              sys.exit(0)
+          # Drop only the requests this run handled: new ones written meanwhile stay for the next run.
+          done = json.load(open(os.environ["RUNNER_TEMP"] + "/processed.json"))
+          path = os.path.join(d, "requests.json")
+          now = json.load(open(path)) if os.path.exists(path) else []
+          left = list(now)
+          for r in done:
+              if r in left:
+                  left.remove(r)
+          json.dump(left, open(path, "w"), indent=1, ensure_ascii=False)
+          run = json.load(open(os.path.join(out, "last-run.json")))
+          hpath = os.path.join(d, "history.json")
+          hist = json.load(open(hpath)) if os.path.exists(hpath) else []
+          if run["results"]:
+              hist = (hist + [run])[-200:]
+          json.dump(hist, open(hpath, "w"), indent=1, ensure_ascii=False)
+          json.dump(run, open(os.path.join(d, "last-run.json"), "w"), indent=1, ensure_ascii=False)
+          PY
+          for try in 1 2 3 4; do
+            rm -rf "$RUNNER_TEMP/save" && git clone -q --depth 1 --branch "$PRIVATE_BRANCH" \
+              "https://x-access-token:${REPO_TOKEN}@github.com/${PRIVATE_REPO}.git" "$RUNNER_TEMP/save"
+            cd "$RUNNER_TEMP/save" && mkdir -p "$DIR"
+            cp "$OUT/board.json" "$OUT/board.md" "$DIR/"
+            python3 "$RUNNER_TEMP/merge.py" "$DIR" "$OUT" "$APPLIED"
+            git add "$DIR"
+            if git diff --cached --quiet; then echo "Nothing changed"; exit 0; fi
+            git commit -q -m "SMM Vault board: $([ "$APPLIED" = true ] && echo 'requests applied, ' )copy $(date -u +%Y-%m-%dT%H:%MZ)"
+            if git push -q origin "$PRIVATE_BRANCH"; then echo "Saved to the private repository"; exit 0; fi
+            echo "Push refused (the branch moved), trying again"; cd "$RUNNER_TEMP"; sleep $((try * 3))
+          done
+          echo "::error::Could not save into the private repository"; exit 1
+
+      - name: Report failed requests
+        if: ${{ steps.ops.outputs.rc == '2' }}
+        run: |
+          echo "::error::Some requests failed: see smm-vault/last-run.json in the private repository"
+          exit 1

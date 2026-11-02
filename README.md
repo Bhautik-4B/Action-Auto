@@ -20,3 +20,14 @@ private repo, APKs to its release `multispace-ci-<branch>`.
 - **4bTech Space - end-to-end on Android (ARM)** (`multispace-e2e.yml`): real arm64 Android
   8.1, 9, 10, 11, 13 and 15 (Redroid containers on `ubuntu-24.04-arm` runners) with 2 GB / 4 GB / 6 GB
   memory limits; clones a test app 3 times and checks each copy is isolated.
+
+## SMM Vault board
+
+**SMM Vault board** (`smm-vault-board.yml`) keeps the project board
+https://github.com/users/4BornGithub/projects/34 in step with the SMM Vault work
+(`4BornGithub/smm-vault_mech`). Card requests (create, edit, status, assign, fields, comment,
+convert to issue, archive) go into `smm-vault/requests.json` on branch `board` of the
+private repository `Bhautik-4B/Game-Auto`; *Run workflow* applies them with `PROJECTS_TOKEN`
+and saves the outcome (`last-run.json`, `history.json`) and a copy of the board (`board.json`,
+`board.md`) next to it. Every 3 hours it refreshes the copy only. The request format is at the
+top of `.github/scripts/board_ops.py`. No card text is printed in the log.
