@@ -1,0 +1,59 @@
+name: 4bTech Space - roll back to 1.1.5 (public update files)
+
+# Owner's request, 2 Nov 2026: 1.1.5 phones could not download 1.1.6 (TLS read errors) and the
+# mandatory update locked them out. Puts the public update files back exactly as before 1.1.6:
+#  - space-latest.json = 1.1.5 (the file phones read first),
+#  - 4bTech-Space.apk on the "APK" releases (here and in Game-Auto) = the 1.1.5 APK,
+#  - release space-v1.1.6 marked pre-release (the app's GitHub-API fallback skips pre-releases).
+# No APK is built; nothing is deleted (1.1.6 stays as a pre-release for a later fixed release).
+
+on:
+  push:
+    branches: [claude/rollback-1.1.5]
+    paths: [.github/workflows/multispace-rollback.yml]
+
+permissions:
+  contents: write
+
+env:
+  DOWNLOAD_REPO: Bhautik-4B/Game-Auto
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Token for Game-Auto
+        id: token
+        env:
+          MULTISPACE_REPO_TOKEN: ${{ secrets.MULTISPACE_REPO_TOKEN }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          PROJECTS_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+        run: |
+          for n in MULTISPACE_REPO_TOKEN PRIVATE_REPO_TOKEN PROJECTS_TOKEN; do
+            v="${!n}"; [ -n "$v" ] || continue
+            git ls-remote "https://x-access-token:$v@github.com/$DOWNLOAD_REPO.git" HEAD >/dev/null 2>&1 && { echo "name=$n" >> "$GITHUB_OUTPUT"; exit 0; }
+          done
+          echo "::error::no token can reach $DOWNLOAD_REPO"; exit 1
+
+      - name: Public files back to 1.1.5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          echo "before: $(curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/download/APK/space-latest.json)" | tee -a "$GITHUB_STEP_SUMMARY"
+          gh release download space-v1.1.5 --repo "$GITHUB_REPOSITORY" --pattern 4bTech-Space-1.1.5.apk --dir .
+          cp 4bTech-Space-1.1.5.apk 4bTech-Space.apk
+          printf '{"version":"1.1.5","code":10105,"url":"https://github.com/%s/releases/download/space-v1.1.5/4bTech-Space-1.1.5.apk"}' "$GITHUB_REPOSITORY" > space-latest.json
+          gh release upload APK 4bTech-Space.apk space-latest.json --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit space-v1.1.6 --repo "$GITHUB_REPOSITORY" --prerelease
+          sleep 5
+          echo "after:  $(curl -fsSL -H 'Cache-Control: no-cache' https://github.com/$GITHUB_REPOSITORY/releases/download/APK/space-latest.json)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "1.1.6 pre-release: $(gh release view space-v1.1.6 --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Game-Auto download page back to 1.1.5
+        env:
+          GH_TOKEN: ${{ secrets[steps.token.outputs.name] }}
+        run: |
+          set -e
+          gh release upload APK 4bTech-Space.apk --repo "$DOWNLOAD_REPO" --clobber
+          echo "Game-Auto 4bTech-Space.apk = 1.1.5" | tee -a "$GITHUB_STEP_SUMMARY"
