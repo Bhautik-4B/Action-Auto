@@ -147,13 +147,15 @@ class Board:
     def option(self, field, wanted):
         opts, w = field["options"], norm(wanted)
         aliases = {"todo": ["todo", "backlog"], "inprogress": ["inprogress", "progress", "doing"],
-                   "progress": ["inprogress", "progress", "doing"], "done": ["done", "complete", "closed"]}
+                   "progress": ["inprogress", "progress", "doing"], "done": ["done", "completed", "complete", "closed"],
+                   "review": ["review", "reviewapproval", "approval"], "hold": ["onhold"]}
         for key in [w] + aliases.get(w, []):
             for o in opts:
                 if norm(o["name"]) == key:
                     return o
+        # Then a part of a name, but "done" never picks "Done But Not Deployed" by itself.
         for key in [w] + aliases.get(w, []):
-            hits = [o for o in opts if key in norm(o["name"])]
+            hits = [o for o in opts if key in norm(o["name"]) and ("not" not in norm(o["name"]) or "not" in w)]
             if len(hits) == 1:
                 return hits[0]
         raise GqlError(f"no option '{wanted}' in field '{field['name']}' (options: {[o['name'] for o in opts]})")
